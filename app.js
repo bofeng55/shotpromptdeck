@@ -1,0 +1,1972 @@
+﻿const DB_NAME = "shot-prompt-workspace-db";
+const STORE_NAME = "workspace";
+const RECORD_KEY = "workspace-state";
+const PERSIST_DEBOUNCE_MS = 300;
+const IMAGE_MAX_DIMENSION = 1280;
+const IMAGE_OUTPUT_MIME = "image/jpeg";
+const IMAGE_OUTPUT_QUALITY = 0.76;
+const SYSTEM_PROMPT = "你是专业的视频生成提示词导演，只输出最终可直接使用的中文视频生成 Prompt，不要解释。";
+const PROVIDER_CONFIGS = {
+  gemini: {
+    id: "gemini",
+    label: "Gemini",
+    apiKeyLabel: "Gemini API Key",
+    defaultModel: "gemini-3-flash-preview",
+    modelSuggestions: ["gemini-3-flash-preview", "gemini-2.5-flash", "gemini-2.5-pro"],
+    requestMode: "gemini",
+    temperature: 0.4,
+  },
+  openai: {
+    id: "openai",
+    label: "OpenAI",
+    apiKeyLabel: "OpenAI API Key",
+    defaultModel: "gpt-5.4",
+    modelSuggestions: ["gpt-5.4", "gpt-4.1", "gpt-4o-mini"],
+    requestMode: "openai",
+    baseUrl: "https://api.openai.com/v1",
+    temperature: 0.4,
+  },
+};
+
+const defaultState = {
+  settings: {
+    provider: "gemini",
+    apiKey: "",
+    apiKeys: {},
+    model: PROVIDER_CONFIGS.gemini.defaultModel,
+    globalDirection: "",
+  },
+  shots: [],
+  favorites: [],
+};
+
+const elements = {
+  workspaceTab: document.querySelector("#workspaceTab"),
+  favoritesTab: document.querySelector("#favoritesTab"),
+  settingsButton: document.querySelector("#settingsButton"),
+  heroTitleLine1: document.querySelector("#heroTitleLine1"),
+  heroTitleLine2: document.querySelector("#heroTitleLine2"),
+  heroTitleLine3: document.querySelector("#heroTitleLine3"),
+  heroSubtitleLine1: document.querySelector("#heroSubtitleLine1"),
+  heroSubtitleLine2: document.querySelector("#heroSubtitleLine2"),
+  workspaceControls: document.querySelector("#workspaceControls"),
+  globalDirection: document.querySelector("#globalDirection"),
+  imageUpload: document.querySelector("#imageUpload"),
+  batchMode: document.querySelector("#batchMode"),
+  batchGenerateButton: document.querySelector("#batchGenerateButton"),
+  exportPromptsButton: document.querySelector("#exportPromptsButton"),
+  exportButton: document.querySelector("#exportButton"),
+  importInput: document.querySelector("#importInput"),
+  clearButton: document.querySelector("#clearButton"),
+  shotsContainer: document.querySelector("#shotsContainer"),
+  workspaceView: document.querySelector("#workspaceView"),
+  favoritesView: document.querySelector("#favoritesView"),
+  workspaceSummary: document.querySelector("#workspaceSummary"),
+  favoritesContainer: document.querySelector("#favoritesContainer"),
+  shotCount: document.querySelector("#shotCount"),
+  historyCount: document.querySelector("#historyCount"),
+  chatCount: document.querySelector("#chatCount"),
+  favoriteCount: document.querySelector("#favoriteCount"),
+  favoriteHistoryCount: document.querySelector("#favoriteHistoryCount"),
+  favoritesSearch: document.querySelector("#favoritesSearch"),
+  favoritesTagFilter: document.querySelector("#favoritesTagFilter"),
+  favoriteModal: document.querySelector("#favoriteModal"),
+  favoriteModalContent: document.querySelector("#favoriteModalContent"),
+  settingsModal: document.querySelector("#settingsModal"),
+  settingsModalContent: document.querySelector("#settingsModalContent"),
+  shotTemplate: document.querySelector("#shotTemplate"),
+  favoriteTemplate: document.querySelector("#favoriteTemplate"),
+  statusText: document.querySelector("#statusText"),
+  lightbox: document.querySelector("#lightbox"),
+  lightboxImage: document.querySelector("#lightboxImage"),
+  lightboxClose: document.querySelector("#lightboxClose"),
+  lightboxBackdrop: document.querySelector(".lightbox-backdrop"),
+  detailModalBackdrop: document.querySelector(".detail-modal-backdrop"),
+};
+
+let state = structuredClone(defaultState);
+let dbPromise;
+let persistTimer = null;
+const uiState = {
+  draggingShotId: null,
+  currentView: "workspace",
+  selectedFavoriteId: null,
+  favoriteSearchTerm: "",
+  favoriteTagFilter: "",
+  isEditingApiKey: false,
+};
+
+bootstrap();
+
+async function bootstrap() {
+  state = await loadState();
+  syncSettingsInputs();
+  bindGlobalEvents();
+
+  if (!state.shots.length) {
+    state.shots.push(createShot());
+    await persistState("已创建初始镜头。");
+  }
+
+  render();
+}
+
+function bindGlobalEvents() {
+  elements.workspaceTab.addEventListener("click", () => {
+    setCurrentView("workspace");
+  });
+
+  elements.favoritesTab.addEventListener("click", () => {
+    setCurrentView("favorites");
+  });
+
+  elements.settingsButton.addEventListener("click", () => {
+    openSettingsModal();
+  });
+
+  elements.favoritesSearch.addEventListener("input", (event) => {
+    uiState.favoriteSearchTerm = event.target.value.trim().toLowerCase();
+    render();
+  });
+
+  elements.favoritesTagFilter.addEventListener("change", (event) => {
+    uiState.favoriteTagFilter = event.target.value.trim().toLowerCase();
+    render();
+  });
+
+  elements.globalDirection.addEventListener("input", async (event) => {
+    state.settings.globalDirection = event.target.value;
+    queuePersistState("全局风格备注已更新。");
+  });
+
+  elements.imageUpload.addEventListener("change", async (event) => {
+    const files = Array.from(event.target.files || []);
+    if (!files.length) {
+      return;
+    }
+
+    setStatus(`正在导入 ${files.length} 张镜头图...`);
+    const importedShots = [];
+    for (const file of files) {
+      importedShots.push(await createShotFromFile(file));
+    }
+
+    const hadOnlyBlankShot = state.shots.length === 1 && isShotEmpty(state.shots[0]);
+    if (hadOnlyBlankShot) {
+      state.shots = importedShots;
+    } else {
+      state.shots.push(...importedShots);
+    }
+
+    await persistState(`已导入 ${files.length} 个镜头。`);
+    event.target.value = "";
+    render();
+  });
+
+  elements.batchGenerateButton.addEventListener("click", async (event) => {
+    await handleBatchGenerate(event.currentTarget);
+  });
+
+  elements.exportPromptsButton.addEventListener("click", async () => {
+    await flushPendingPersist();
+    exportAllPrompts();
+  });
+
+  elements.exportButton.addEventListener("click", async () => {
+    await flushPendingPersist();
+    exportWorkspace();
+  });
+
+  elements.importInput.addEventListener("change", async (event) => {
+    const [file] = Array.from(event.target.files || []);
+    if (!file) {
+      return;
+    }
+
+    try {
+      const confirmed = window.confirm("导入会覆盖当前工作台镜头、Prompt 归档和对话记录，但不会影响收藏夹和模型设置，是否继续？");
+      if (!confirmed) {
+        return;
+      }
+
+      const importedShots = await importWorkspace(file);
+      closeLightbox();
+      state.shots = importedShots;
+      await persistState("工作台镜头已导入。");
+      render();
+    } catch (error) {
+      setStatus(error.message || "导入工作区失败。");
+    } finally {
+      event.target.value = "";
+    }
+  });
+
+  elements.clearButton.addEventListener("click", async () => {
+    const confirmed = window.confirm("确认清空工作台里的镜头、Prompt 归档和对话记录吗？模型设置和收藏夹不会受影响。");
+    if (!confirmed) {
+      return;
+    }
+
+    closeLightbox();
+    state.shots = [createShot()];
+    await persistState("已清空工作台记录。");
+    render();
+  });
+
+  elements.lightboxClose.addEventListener("click", closeLightbox);
+  elements.lightboxBackdrop.addEventListener("click", closeLightbox);
+  elements.detailModalBackdrop.addEventListener("click", closeFavoriteModal);
+  elements.settingsModal.querySelector(".detail-modal-backdrop").addEventListener("click", closeSettingsModal);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !elements.lightbox.hidden) {
+      closeLightbox();
+    }
+    if (event.key === "Escape" && !elements.favoriteModal.hidden) {
+      closeFavoriteModal();
+    }
+    if (event.key === "Escape" && !elements.settingsModal.hidden) {
+      closeSettingsModal();
+    }
+  });
+
+  window.addEventListener("pagehide", () => {
+    flushPendingPersist();
+  });
+}
+
+function render() {
+  renderPageChrome();
+  syncSettingsInputs();
+  renderSettingsModal();
+  elements.shotsContainer.innerHTML = "";
+  elements.favoritesContainer.innerHTML = "";
+
+  state.shots.forEach((shot, index) => {
+    const fragment = elements.shotTemplate.content.cloneNode(true);
+    const card = fragment.querySelector(".shot-card");
+    const imageFrame = fragment.querySelector(".image-frame");
+    const image = fragment.querySelector(".shot-image");
+    const imageEmpty = fragment.querySelector(".image-empty");
+    const order = fragment.querySelector(".shot-order");
+    const titleInput = fragment.querySelector(".shot-title");
+    const directorNotesInput = fragment.querySelector(".director-notes");
+    const imageInput = fragment.querySelector(".shot-image-input");
+    const promptInput = fragment.querySelector(".shot-prompt");
+    const feedbackInput = fragment.querySelector(".feedback-input");
+    const historyList = fragment.querySelector(".history-list");
+    const chatLog = fragment.querySelector(".chat-log");
+    const currentVersionLabel = fragment.querySelector(".current-version-label");
+    const historyCount = fragment.querySelector(".history-count");
+    const favoriteButton = fragment.querySelector(".favorite-button");
+
+    order.textContent = `Shot ${String(index + 1).padStart(2, "0")}`;
+    order.title = "拖拽以调整镜头顺序";
+    card.dataset.shotId = shot.id;
+    bindShotSortEvents(card, order, shot.id);
+    titleInput.value = shot.title;
+    directorNotesInput.value = shot.directorNotes || "";
+    promptInput.value = shot.currentPrompt;
+    imageEmpty.innerHTML = '<span class="drag-tip">拖拽图片到这里，或点击上传</span>';
+
+    if (shot.imageDataUrl) {
+      imageFrame.classList.add("has-image");
+      image.src = shot.imageDataUrl;
+      image.alt = shot.title ? `${shot.title} 放大预览` : "镜头图放大预览";
+    }
+
+    bindImageDropZone(imageFrame, imageInput, shot);
+
+    currentVersionLabel.textContent = shot.updatedAt ? `最近更新：${formatTime(shot.updatedAt)}` : "尚未保存";
+    historyCount.textContent = `${shot.promptHistory.length} 条归档`;
+    favoriteButton.textContent = isFavoriteShot(shot.id) ? "更新收藏" : "收藏此镜头";
+
+    titleInput.addEventListener("input", async (event) => {
+      shot.title = event.target.value;
+      shot.updatedAt = new Date().toISOString();
+      queuePersistState("镜头标题已更新。");
+    });
+
+    directorNotesInput.addEventListener("input", async (event) => {
+      shot.directorNotes = event.target.value;
+      shot.updatedAt = new Date().toISOString();
+      queuePersistState("导演讲戏已更新。");
+    });
+
+    imageInput.addEventListener("change", async (event) => {
+      const [file] = Array.from(event.target.files || []);
+      if (!file) {
+        return;
+      }
+
+      await updateShotImage(shot, file, "镜头图片已更新。");
+      imageInput.value = "";
+      render();
+    });
+
+    promptInput.addEventListener("input", async (event) => {
+      shot.currentPrompt = event.target.value;
+      shot.updatedAt = new Date().toISOString();
+      queuePersistState("当前 Prompt 已更新。");
+    });
+
+    fragment.querySelector(".generate-button").addEventListener("click", async (event) => {
+      await handleGeneratePrompt(shot.id, event.currentTarget);
+    });
+
+    fragment.querySelector(".save-button").addEventListener("click", async () => {
+      const saved = archiveCurrentPrompt(shot);
+      if (saved) {
+        await persistState("当前 Prompt 版本已保存。");
+        render();
+      }
+    });
+
+    fragment.querySelector(".copy-button").addEventListener("click", async () => {
+      if (!shot.currentPrompt.trim()) {
+        setStatus("当前 Prompt 为空，无法复制。");
+        return;
+      }
+
+      await navigator.clipboard.writeText(shot.currentPrompt);
+      setStatus("当前 Prompt 已复制。");
+    });
+
+    fragment.querySelector(".revise-button").addEventListener("click", async (event) => {
+      const feedback = feedbackInput.value.trim();
+      await handleRevisePrompt(shot.id, feedback, feedbackInput, event.currentTarget);
+    });
+
+    fragment.querySelector(".clear-chat-button").addEventListener("click", async () => {
+      shot.chatHistory = [];
+      shot.updatedAt = new Date().toISOString();
+      await persistState("本镜头对话已清空。");
+      render();
+    });
+
+    fragment.querySelector(".insert-above-button").addEventListener("click", async () => {
+      await insertShotAt(index);
+    });
+
+    fragment.querySelector(".insert-below-button").addEventListener("click", async () => {
+      await insertShotAt(index + 1);
+    });
+
+    fragment.querySelector(".delete-button").addEventListener("click", async () => {
+      if (state.shots.length === 1) {
+        setStatus("至少保留一个镜头。");
+        return;
+      }
+
+      state.shots = state.shots.filter((item) => item.id !== shot.id);
+      await persistState("镜头已删除。");
+      render();
+    });
+
+    favoriteButton.addEventListener("click", async () => {
+      await toggleFavoriteShot(shot);
+    });
+
+    renderHistory(historyList, shot);
+    renderChat(chatLog, shot);
+
+    elements.shotsContainer.append(fragment);
+  });
+
+  renderFavorites();
+  updateSummary();
+}
+
+function renderPageChrome() {
+  const isWorkspace = uiState.currentView === "workspace";
+  elements.workspaceTab.classList.toggle("is-active", isWorkspace);
+  elements.favoritesTab.classList.toggle("is-active", !isWorkspace);
+  elements.workspaceControls.hidden = !isWorkspace;
+  elements.workspaceSummary.hidden = !isWorkspace;
+  elements.workspaceView.hidden = !isWorkspace;
+  elements.favoritesView.hidden = isWorkspace;
+  elements.favoritesSearch.value = uiState.favoriteSearchTerm;
+  populateFavoriteTagFilter();
+  elements.favoritesTagFilter.value = uiState.favoriteTagFilter;
+
+  if (isWorkspace) {
+    elements.heroTitleLine1.textContent = "视频提示词";
+    elements.heroTitleLine2.textContent = "工作台";
+    elements.heroSubtitleLine1.textContent = "为镜头手写或生成视频提示词，";
+    elements.heroSubtitleLine2.textContent = "并在每个镜头旁与AI对话持续修改、迭代、归档。";
+    return;
+  }
+
+  elements.heroTitleLine1.textContent = "视频提示词";
+  elements.heroTitleLine2.textContent = "收藏夹";
+  elements.heroSubtitleLine1.textContent = "收藏你需要反复查看和复用的镜头内容，";
+  elements.heroSubtitleLine2.textContent = "下次打开网页时，仍可在这里继续查看。";
+}
+
+function setCurrentView(view) {
+  uiState.currentView = view;
+  render();
+}
+
+function renderFavorites() {
+  const favorites = getFilteredFavorites();
+
+  if (!favorites.length) {
+    elements.favoritesContainer.innerHTML = uiState.favoriteSearchTerm
+      ? '<div class="empty-state">没有找到匹配这个关键词的收藏镜头。</div>'
+      : '<div class="empty-state">还没有收藏镜头。你可以在工作台里的 shot 点击“收藏此镜头”。</div>';
+    closeFavoriteModal();
+    return;
+  }
+
+  favorites.forEach((favorite, index) => {
+    const fragment = elements.favoriteTemplate.content.cloneNode(true);
+    const imageFrame = fragment.querySelector(".favorite-image-frame");
+    const image = fragment.querySelector(".favorite-image");
+    const openButton = fragment.querySelector(".favorite-open-button");
+    const title = fragment.querySelector(".favorite-title");
+
+    if (favorite.imageDataUrl) {
+      imageFrame.classList.add("has-image");
+      image.src = favorite.imageDataUrl;
+    }
+    image.alt = favorite.title ? `${favorite.title} 收藏预览` : "收藏镜头图预览";
+    title.textContent = favorite.title || "未命名镜头";
+    title.title = [favorite.title || "未命名镜头", ...(favorite.tags || [])].join(" · ");
+
+    openButton.addEventListener("click", () => {
+      openFavoriteModal(favorite.id);
+    });
+
+    fragment.querySelector(".move-to-workspace-button").addEventListener("click", async () => {
+      await moveFavoriteToWorkspace(favorite);
+    });
+
+    fragment.querySelector(".unfavorite-button").addEventListener("click", async () => {
+      state.favorites = state.favorites.filter((item) => item.id !== favorite.id);
+      if (uiState.selectedFavoriteId === favorite.id) {
+        uiState.selectedFavoriteId = null;
+      }
+      await persistState("已移出收藏。");
+      render();
+    });
+
+    elements.favoritesContainer.append(fragment);
+  });
+}
+
+function renderFavoriteHistory(container, entries, favoriteId = "") {
+  container.innerHTML = "";
+  if (!entries.length) {
+    container.innerHTML = '<div class="empty-state">暂无 Prompt归档。</div>';
+    return;
+  }
+
+  [...entries].slice(-5).reverse().forEach((entry) => {
+    const item = document.createElement("div");
+    item.className = "history-item";
+    item.innerHTML = `
+      <header>
+        <strong>${escapeHtml(entry.label)} · ${formatTime(entry.createdAt)}</strong>
+        <div class="history-actions">
+          <button class="ghost-button archive-rate-button" type="button">${renderArchiveStars(entry.rating || 0)}</button>
+        </div>
+      </header>
+      <p>${escapeHtml(entry.prompt)}</p>
+    `;
+    item.querySelector(".archive-rate-button").addEventListener("click", async () => {
+      const favorite = state.favorites.find((item) => item.id === favoriteId);
+      const favoriteEntry = favorite?.promptHistory?.find((item) => item.id === entry.id);
+      if (!favoriteEntry) {
+        return;
+      }
+
+      favoriteEntry.rating = getNextArchiveRating(favoriteEntry.rating || 0);
+      await persistState("收藏归档星标已更新。");
+      renderFavoriteModal(favorite);
+    });
+    container.append(item);
+  });
+}
+
+function renderFavoriteModal(favorite) {
+  elements.favoriteModalContent.innerHTML = `
+    <article class="shot-card favorite-detail-card">
+      <div class="panel-header">
+        <h2>收藏详情</h2>
+        <div class="history-actions">
+          <button class="ghost-button favorite-detail-move" type="button">移入工作台</button>
+          <button class="ghost-button favorite-detail-remove danger" type="button">移出收藏</button>
+          <button class="ghost-button favorite-detail-close" type="button">关闭</button>
+        </div>
+      </div>
+      <div class="favorite-detail-body">
+        <section class="image-panel favorite-detail-panel">
+          <div class="image-frame favorite-detail-image ${favorite.imageDataUrl ? "has-image" : ""}">
+            <img class="shot-image" src="${escapeHtml(favorite.imageDataUrl || "")}" alt="${escapeHtml(favorite.title || "收藏镜头图")}">
+            <div class="image-empty">未上传镜头图</div>
+          </div>
+          <div class="favorite-meta-list">
+            <p class="favorite-title">${escapeHtml(favorite.title || "未命名镜头")}</p>
+            <p class="favorite-time meta">收藏时间：${formatTime(favorite.favoritedAt)}</p>
+          </div>
+          <label class="field compact favorite-tags-field">
+            <span>新增标签</span>
+            <input class="favorite-tags-input" type="text" value="" placeholder="例如：第一场，s01，角色名，奇幻">
+          </label>
+          <div class="favorite-tag-list">${renderFavoriteTags(favorite.tags || [])}</div>
+        </section>
+        <section class="prompt-panel favorite-detail-panel">
+          <div class="favorite-block">
+            <h3>导演讲戏</h3>
+            <p class="favorite-notes">${escapeHtml(favorite.directorNotes || "暂无导演讲戏")}</p>
+          </div>
+        </section>
+        <section class="prompt-panel favorite-detail-panel">
+          <div class="favorite-block">
+            <h3>当前 Prompt</h3>
+            <p class="favorite-prompt">${escapeHtml(favorite.currentPrompt || "暂无 Prompt")}</p>
+          </div>
+        </section>
+        <section class="chat-panel favorite-detail-panel">
+          <div class="favorite-block">
+            <button class="favorite-archive-toggle" type="button" aria-expanded="false">展开 Prompt归档</button>
+            <div class="favorite-history is-collapsed"></div>
+          </div>
+        </section>
+      </div>
+    </article>
+  `;
+
+  const historyContainer = elements.favoriteModalContent.querySelector(".favorite-history");
+  const archiveToggleButton = elements.favoriteModalContent.querySelector(".favorite-archive-toggle");
+
+  renderFavoriteHistory(historyContainer, favorite.promptHistory || [], favorite.id);
+  const tagsInput = elements.favoriteModalContent.querySelector(".favorite-tags-input");
+  tagsInput.addEventListener("change", async (event) => {
+    await saveFavoriteTags(favorite.id, event.currentTarget.value);
+    event.currentTarget.value = "";
+  });
+  tagsInput.addEventListener("blur", async (event) => {
+    await saveFavoriteTags(favorite.id, event.currentTarget.value);
+    event.currentTarget.value = "";
+  });
+  tagsInput.addEventListener("keydown", async (event) => {
+    if (!["Enter", ",", "，", ";", "；"].includes(event.key)) {
+      return;
+    }
+
+    event.preventDefault();
+    const separator = event.key === "Enter" ? "，" : event.key;
+    const input = event.currentTarget;
+    if (!input.value.endsWith(separator)) {
+      input.value = `${input.value}${separator}`;
+    }
+    await saveFavoriteTags(favorite.id, input.value);
+    input.value = "";
+  });
+  elements.favoriteModalContent.querySelectorAll(".favorite-tag-remove").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await removeFavoriteTag(favorite.id, button.dataset.tagValue || "");
+    });
+  });
+  archiveToggleButton.addEventListener("click", () => {
+    const button = archiveToggleButton;
+    const history = historyContainer;
+    const expanded = button.getAttribute("aria-expanded") === "true";
+    button.setAttribute("aria-expanded", String(!expanded));
+    button.textContent = expanded ? "展开 Prompt归档" : "收起 Prompt归档";
+    history.classList.toggle("is-collapsed", expanded);
+  });
+  elements.favoriteModalContent.querySelector(".favorite-detail-move").addEventListener("click", async () => {
+    await moveFavoriteToWorkspace(favorite);
+  });
+  elements.favoriteModalContent.querySelector(".favorite-detail-remove").addEventListener("click", async () => {
+    state.favorites = state.favorites.filter((item) => item.id !== favorite.id);
+    if (uiState.selectedFavoriteId === favorite.id) {
+      uiState.selectedFavoriteId = null;
+    }
+    await persistState("已移出收藏。");
+    closeFavoriteModal();
+    render();
+  });
+  elements.favoriteModalContent.querySelector(".favorite-detail-close").addEventListener("click", closeFavoriteModal);
+  elements.favoriteModalContent.querySelector(".favorite-detail-image").addEventListener("click", () => {
+    if (!favorite.imageDataUrl) {
+      return;
+    }
+    openLightbox(favorite.imageDataUrl, favorite.title);
+  });
+}
+
+function isFavoriteShot(shotId) {
+  return state.favorites.some((item) => item.shotId === shotId);
+}
+
+async function toggleFavoriteShot(shot) {
+  const snapshot = createFavoriteSnapshot(shot);
+  const existingIndex = state.favorites.findIndex((item) => item.shotId === shot.id);
+
+  if (existingIndex >= 0) {
+    state.favorites.splice(existingIndex, 1, snapshot);
+    await persistState("收藏内容已更新。");
+  } else {
+    state.favorites.push(snapshot);
+    await persistState("已加入收藏夹。");
+  }
+
+  render();
+}
+
+function createFavoriteSnapshot(shot) {
+  const existing = state.favorites.find((item) => item.shotId === shot.id);
+  return {
+    id: existing?.id || crypto.randomUUID(),
+    shotId: shot.id,
+    title: shot.title,
+    directorNotes: shot.directorNotes,
+    imageDataUrl: shot.imageDataUrl,
+    currentPrompt: shot.currentPrompt,
+    promptHistory: structuredClone(shot.promptHistory || []),
+    tags: structuredClone(existing?.tags || []),
+    favoritedAt: new Date().toISOString(),
+    updatedAt: shot.updatedAt || new Date().toISOString(),
+  };
+}
+
+function getFilteredFavorites() {
+  const term = uiState.favoriteSearchTerm;
+  const favorites = [...state.favorites].sort((a, b) => new Date(b.favoritedAt) - new Date(a.favoritedAt));
+  return favorites.filter((favorite) => {
+    const historyText = (favorite.promptHistory || []).map((entry) => `${entry.label} ${entry.prompt}`).join("\n");
+    const tagsText = (favorite.tags || []).join("\n");
+    const haystack = [
+      favorite.title,
+      favorite.directorNotes,
+      favorite.currentPrompt,
+      historyText,
+      tagsText,
+    ].join("\n").toLowerCase();
+    const matchTerm = !term || haystack.includes(term);
+    const matchTag = !uiState.favoriteTagFilter || (favorite.tags || []).some((tag) => tag.toLowerCase() === uiState.favoriteTagFilter);
+    return matchTerm && matchTag;
+  });
+}
+
+async function moveFavoriteToWorkspace(favorite) {
+  const shot = createShot();
+  shot.title = favorite.title || "";
+  shot.directorNotes = favorite.directorNotes || "";
+  shot.imageDataUrl = favorite.imageDataUrl || "";
+  shot.currentPrompt = favorite.currentPrompt || "";
+  shot.promptHistory = structuredClone(favorite.promptHistory || []);
+  shot.updatedAt = new Date().toISOString();
+  state.shots.push(shot);
+  await persistState("已移入工作台。");
+  if (!elements.favoriteModal.hidden) {
+    renderFavoriteModal(favorite);
+  }
+  render();
+}
+
+function updateSummary() {
+  const historyTotal = state.shots.reduce((total, shot) => total + shot.promptHistory.length, 0);
+  const chatTotal = state.shots.reduce((total, shot) => total + shot.chatHistory.length, 0);
+  const favoriteHistoryTotal = state.favorites.reduce((total, favorite) => total + (favorite.promptHistory?.length || 0), 0);
+
+  elements.shotCount.textContent = String(state.shots.length);
+  elements.historyCount.textContent = String(historyTotal);
+  elements.chatCount.textContent = String(chatTotal);
+  elements.favoriteCount.textContent = String(state.favorites.length);
+  elements.favoriteHistoryCount.textContent = String(favoriteHistoryTotal);
+}
+
+function openFavoriteModal(favoriteId) {
+  const favorite = state.favorites.find((item) => item.id === favoriteId);
+  if (!favorite) {
+    return;
+  }
+
+  uiState.selectedFavoriteId = favoriteId;
+  renderFavoriteModal(favorite);
+  elements.favoriteModal.hidden = false;
+  document.body.classList.add("lightbox-open");
+}
+
+function closeFavoriteModal() {
+  elements.favoriteModal.hidden = true;
+  elements.favoriteModalContent.innerHTML = "";
+  document.body.classList.remove("lightbox-open");
+}
+
+function bindImageDropZone(imageFrame, imageInput, shot) {
+  imageFrame.addEventListener("click", () => {
+    if (shot.imageDataUrl) {
+      openLightbox(shot.imageDataUrl, shot.title);
+      return;
+    }
+
+    imageInput.click();
+  });
+
+  imageFrame.addEventListener("dragover", (event) => {
+    event.preventDefault();
+    imageFrame.classList.add("drag-over");
+  });
+
+  imageFrame.addEventListener("dragenter", (event) => {
+    event.preventDefault();
+    imageFrame.classList.add("drag-over");
+  });
+
+  imageFrame.addEventListener("dragleave", (event) => {
+    if (event.currentTarget.contains(event.relatedTarget)) {
+      return;
+    }
+    imageFrame.classList.remove("drag-over");
+  });
+
+  imageFrame.addEventListener("drop", async (event) => {
+    event.preventDefault();
+    imageFrame.classList.remove("drag-over");
+    const [file] = Array.from(event.dataTransfer?.files || []);
+    if (!file) {
+      return;
+    }
+
+    if (!file.type.startsWith("image/")) {
+      setStatus("请拖入图片文件。");
+      return;
+    }
+
+    await updateShotImage(shot, file, "拖拽图片上传成功。");
+    render();
+  });
+}
+
+function openLightbox(src, title) {
+  elements.lightboxImage.src = src;
+  elements.lightboxImage.alt = title ? `${title} 放大图` : "镜头图放大图";
+  elements.lightbox.hidden = false;
+  document.body.classList.add("lightbox-open");
+}
+
+function closeLightbox() {
+  elements.lightbox.hidden = true;
+  elements.lightboxImage.src = "";
+  document.body.classList.remove("lightbox-open");
+}
+
+function renderHistory(container, shot) {
+  container.innerHTML = "";
+
+  if (!shot.promptHistory.length) {
+    container.innerHTML = '<div class="empty-state">这个镜头还没有 Prompt归档。</div>';
+    return;
+  }
+
+  const history = [...shot.promptHistory].reverse();
+  history.forEach((entry) => {
+    const item = document.createElement("div");
+    item.className = "history-item";
+    item.innerHTML = `
+      <header>
+        <strong>${escapeHtml(entry.label)} · ${formatTime(entry.createdAt)}</strong>
+        <div class="history-actions">
+          <button class="ghost-button archive-rate-button" type="button">${renderArchiveStars(entry.rating || 0)}</button>
+          <button class="ghost-button restore-history-button" type="button">恢复到当前</button>
+        </div>
+      </header>
+      <p>${escapeHtml(entry.prompt)}</p>
+    `;
+
+    item.querySelector(".archive-rate-button").addEventListener("click", async () => {
+      entry.rating = getNextArchiveRating(entry.rating || 0);
+      await persistState("Prompt归档星标已更新。");
+      render();
+    });
+
+    item.querySelector(".restore-history-button").addEventListener("click", async () => {
+      shot.currentPrompt = entry.prompt;
+      shot.updatedAt = new Date().toISOString();
+      await persistState("已从历史恢复 Prompt。");
+      render();
+    });
+
+    container.append(item);
+  });
+}
+
+function renderChat(container, shot) {
+  container.innerHTML = "";
+
+  if (!shot.chatHistory.length) {
+    container.innerHTML = '<div class="empty-state">对当前 Prompt 提修改意见，让 AI 连续迭代。</div>';
+    return;
+  }
+
+  shot.chatHistory.forEach((message) => {
+    const item = document.createElement("div");
+    item.className = `chat-item ${message.role}`;
+    item.innerHTML = `
+      <header>
+        <strong>${message.role === "user" ? "你" : "AI"}</strong>
+        <span class="meta">${formatTime(message.createdAt)}</span>
+      </header>
+      <p>${escapeHtml(message.content)}</p>
+    `;
+    container.append(item);
+  });
+}
+
+function renderArchiveStars(rating) {
+  return Number(rating) ? "★" : "☆";
+}
+
+function getNextArchiveRating(currentRating) {
+  return Number(currentRating) ? 0 : 1;
+}
+
+function bindShotSortEvents(card, handle, shotId) {
+  handle.draggable = true;
+
+  handle.addEventListener("dragstart", (event) => {
+    uiState.draggingShotId = shotId;
+    card.classList.add("sorting");
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", shotId);
+  });
+
+  handle.addEventListener("dragend", () => {
+    uiState.draggingShotId = null;
+    clearSortStyles();
+  });
+
+  card.addEventListener("dragover", (event) => {
+    if (!uiState.draggingShotId || uiState.draggingShotId === shotId) {
+      return;
+    }
+
+    event.preventDefault();
+    card.classList.add("drop-target");
+  });
+
+  card.addEventListener("dragleave", (event) => {
+    if (event.currentTarget.contains(event.relatedTarget)) {
+      return;
+    }
+    card.classList.remove("drop-target");
+  });
+
+  card.addEventListener("drop", async (event) => {
+    event.preventDefault();
+    card.classList.remove("drop-target");
+
+    const sourceId = uiState.draggingShotId || event.dataTransfer.getData("text/plain");
+    if (!sourceId || sourceId === shotId) {
+      return;
+    }
+
+    await reorderShots(sourceId, shotId);
+  });
+}
+
+async function handleGeneratePrompt(shotId, button) {
+  const shot = getShotById(shotId);
+  if (!shot) {
+    return;
+  }
+
+  if (!getCurrentApiKey()) {
+    setStatus(`请先填写 ${getCurrentProviderConfig().apiKeyLabel}。`);
+    return;
+  }
+
+  if (!shot.imageDataUrl) {
+    setStatus("请先为这个镜头上传图片。");
+    return;
+  }
+
+  const originalLabel = button.textContent;
+
+  try {
+    setButtonLoading(button, "生成中...");
+    const output = await requestPromptFromProvider({
+      instruction: buildGenerationInstruction(shot),
+      imageDataUrl: shot.imageDataUrl,
+    });
+
+    if (shot.currentPrompt.trim()) {
+      archiveCurrentPrompt(shot);
+    }
+
+    shot.currentPrompt = output;
+    shot.updatedAt = new Date().toISOString();
+    pushHistoryEntry(shot, output, "AI 生成");
+    shot.chatHistory.push(createChatEntry("assistant", `已基于镜头图生成新版 Prompt：\n${output}`));
+    await persistState("AI Prompt 已生成并存档。");
+    render();
+  } catch (error) {
+    setStatus(error.message || "生成 Prompt 失败。");
+  } finally {
+    resetButtonLoading(button, originalLabel);
+  }
+}
+
+async function handleBatchGenerate(button) {
+  if (!getCurrentApiKey()) {
+    setStatus(`请先填写 ${getCurrentProviderConfig().apiKeyLabel}。`);
+    return;
+  }
+
+  const mode = elements.batchMode.value || "empty";
+  if (mode === "all") {
+    const confirmed = window.confirm("这会重写所有有图镜头的当前 Prompt，并把旧版本归档，是否继续？");
+    if (!confirmed) {
+      return;
+    }
+  }
+
+  const targets = state.shots.filter((shot) => {
+    if (!shot.imageDataUrl) {
+      return false;
+    }
+
+    if (mode === "all") {
+      return true;
+    }
+
+    return !shot.currentPrompt.trim();
+  });
+
+  if (!targets.length) {
+    setStatus(mode === "all" ? "没有可批量重写的有图镜头。" : "没有可批量生成的空 Prompt 镜头。");
+    return;
+  }
+
+  const originalLabel = button.textContent;
+  let successCount = 0;
+
+  try {
+    setButtonLoading(button, `批量生成中 0/${targets.length}`);
+    for (const [index, shot] of targets.entries()) {
+      setButtonLoading(button, `批量生成中 ${index + 1}/${targets.length}`);
+      try {
+        const output = await requestPromptFromProvider({
+          instruction: buildGenerationInstruction(shot),
+          imageDataUrl: shot.imageDataUrl,
+        });
+
+        if (shot.currentPrompt.trim()) {
+          archiveCurrentPrompt(shot);
+        }
+
+        shot.currentPrompt = output;
+        shot.updatedAt = new Date().toISOString();
+        pushHistoryEntry(shot, output, "批量 AI 生成");
+        shot.chatHistory.push(createChatEntry("assistant", `批量生成结果：\n${output}`));
+        successCount += 1;
+        render();
+      } catch (error) {
+        shot.chatHistory.push(createChatEntry("assistant", `批量生成失败：${error.message || "未知错误"}`));
+      }
+    }
+
+    await persistState(`批量生成完成，成功 ${successCount}/${targets.length} 个镜头。`);
+    render();
+  } finally {
+    resetButtonLoading(button, originalLabel);
+  }
+}
+
+async function handleRevisePrompt(shotId, feedback, feedbackInput, button) {
+  const shot = getShotById(shotId);
+  if (!shot) {
+    return;
+  }
+
+  if (!getCurrentApiKey()) {
+    setStatus(`请先填写 ${getCurrentProviderConfig().apiKeyLabel}。`);
+    return;
+  }
+
+  if (!feedback) {
+    setStatus("请先写下修改要求。");
+    return;
+  }
+
+  const originalLabel = button.textContent;
+
+  try {
+    setButtonLoading(button, "修改中...");
+    shot.chatHistory.push(createChatEntry("user", feedback));
+
+    const output = await requestPromptFromProvider({
+      instruction: buildRevisionInstruction(shot, feedback),
+      imageDataUrl: shot.imageDataUrl,
+    });
+
+    if (shot.currentPrompt.trim()) {
+      archiveCurrentPrompt(shot);
+    }
+
+    shot.currentPrompt = output;
+    shot.updatedAt = new Date().toISOString();
+    pushHistoryEntry(shot, output, "AI 修改");
+    shot.chatHistory.push(createChatEntry("assistant", output));
+    feedbackInput.value = "";
+    await persistState("AI 已根据反馈修改 Prompt。");
+    render();
+  } catch (error) {
+    setStatus(error.message || "修改 Prompt 失败。");
+  } finally {
+    resetButtonLoading(button, originalLabel);
+  }
+}
+
+function buildGenerationInstruction(shot) {
+  const currentPrompt = shot.currentPrompt.trim();
+  const direction = state.settings.globalDirection.trim();
+  const directorNotes = (shot.directorNotes || "").trim();
+
+  return [
+    "你是专业的视频生成提示词导演。",
+    "请基于输入图片，输出一段高质量中文视频生成 Prompt。",
+    "要求：",
+    "1. 直接输出最终 Prompt，不要解释",
+    "2. 包含运镜、主体、动作、镜头语言、氛围、材质质感",
+    "3. 风格要适合图生视频模型，文字具体、可执行、画面感强",
+    directorNotes ? `导演讲戏：${directorNotes}` : "",
+    direction ? `全局风格备注：${direction}` : "",
+    currentPrompt ? `用户已有草稿，请在保留有用意图的前提下重写提升：${currentPrompt}` : "用户暂未提供草稿，请直接从图片生成。",
+  ].filter(Boolean).join("\n");
+}
+
+function buildRevisionInstruction(shot, feedback) {
+  const title = shot.title.trim() || "未命名镜头";
+  const direction = state.settings.globalDirection.trim();
+  const directorNotes = (shot.directorNotes || "").trim();
+  const currentPrompt = shot.currentPrompt.trim();
+
+  return [
+    "你是专业的视频生成提示词导演。",
+    "请严格基于用户当前正在使用的 Prompt 进行修改。",
+    "要求：",
+    "1. 只输出修改后的最终 Prompt，不要解释。",
+    "2. 必须把“当前 Prompt”视为唯一修改基线，不要回退到更早版本，也不要优先参考你之前生成过的 Prompt。",
+    "3. 即使当前 Prompt 是用户手写的，也要在保留其核心意图的前提下精准修改。",
+    "4. 如果输入图片存在，可继续结合图片修正画面细节。",
+    `镜头标题：${title}`,
+    directorNotes ? `导演讲戏：${directorNotes}` : "",
+    direction ? `全局风格备注：${direction}` : "",
+    `当前 Prompt：${currentPrompt || "暂无"}`,
+    `用户本次反馈：${feedback}`,
+  ].filter(Boolean).join("\n");
+}
+
+async function requestPromptFromProvider({ instruction, imageDataUrl }) {
+  const provider = getCurrentProviderConfig();
+  if (provider.requestMode === "gemini") {
+    return requestPromptFromGemini({ instruction, imageDataUrl, provider });
+  }
+
+  if (provider.requestMode === "openai") {
+    return requestPromptFromOpenAI({ instruction, imageDataUrl, provider });
+  }
+
+  throw new Error(`暂不支持 ${provider.label}。`);
+}
+
+async function requestPromptFromGemini({ instruction, imageDataUrl, provider }) {
+  const model = encodeURIComponent(state.settings.model || provider.defaultModel);
+  const apiKey = getCurrentApiKey();
+  const parts = [];
+
+  if (imageDataUrl) {
+    const { mimeType, data } = parseDataUrl(imageDataUrl);
+    parts.push({
+      inline_data: {
+        mime_type: mimeType,
+        data,
+      },
+    });
+  }
+
+  parts.push({
+    text: instruction,
+  });
+
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": apiKey,
+    },
+    body: JSON.stringify({
+      system_instruction: {
+        parts: [
+          {
+            text: SYSTEM_PROMPT,
+          },
+        ],
+      },
+      contents: [
+        {
+          parts,
+        },
+      ],
+      generationConfig: {
+        temperature: provider.temperature ?? 0.4,
+      },
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error?.message || `Gemini 请求失败（${response.status}）`);
+  }
+
+  const text = extractGeminiText(payload);
+  if (!text) {
+    throw new Error("模型返回为空，未生成 Prompt。");
+  }
+
+  return text;
+}
+
+async function requestPromptFromOpenAI({ instruction, imageDataUrl, provider }) {
+  const model = state.settings.model || provider.defaultModel;
+  const apiKey = getCurrentApiKey();
+  const content = [];
+
+  if (imageDataUrl) {
+    content.push({
+      type: "input_image",
+      image_url: imageDataUrl,
+    });
+  }
+
+  content.push({
+    type: "input_text",
+    text: instruction,
+  });
+
+  const response = await fetch(`${provider.baseUrl}/responses`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      input: [
+        {
+          role: "system",
+          content: [
+            {
+              type: "input_text",
+              text: SYSTEM_PROMPT,
+            },
+          ],
+        },
+        {
+          role: "user",
+          content,
+        },
+      ],
+      temperature: provider.temperature ?? 0.4,
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error?.message || `OpenAI 请求失败（${response.status}）`);
+  }
+
+  const text = extractOpenAIResponseText(payload);
+  if (!text) {
+    throw new Error("模型返回为空，未生成 Prompt。");
+  }
+
+  return text;
+}
+
+function extractGeminiText(payload) {
+  const candidates = Array.isArray(payload.candidates) ? payload.candidates : [];
+  for (const candidate of candidates) {
+    const parts = candidate?.content?.parts;
+    if (!Array.isArray(parts)) {
+      continue;
+    }
+
+    const text = parts
+      .map((part) => part?.text || "")
+      .join("\n")
+      .trim();
+
+    if (text) {
+      return text;
+    }
+  }
+
+  return "";
+}
+
+function extractOpenAIResponseText(payload) {
+  if (typeof payload.output_text === "string" && payload.output_text.trim()) {
+    return payload.output_text.trim();
+  }
+
+  const output = Array.isArray(payload.output) ? payload.output : [];
+  for (const item of output) {
+    const content = Array.isArray(item?.content) ? item.content : [];
+    const text = content
+      .map((entry) => entry?.text || "")
+      .join("\n")
+      .trim();
+
+    if (text) {
+      return text;
+    }
+  }
+
+  return "";
+}
+
+
+function parseDataUrl(dataUrl) {
+  const match = String(dataUrl).match(/^data:(.+?);base64,(.+)$/);
+  if (!match) {
+    throw new Error("图片数据格式无效。");
+  }
+
+  return {
+    mimeType: match[1],
+    data: match[2],
+  };
+}
+
+async function insertShotAt(index) {
+  state.shots.splice(index, 0, createShot());
+  await persistState("已插入新镜头。");
+  render();
+}
+
+async function reorderShots(sourceId, targetId) {
+  const sourceIndex = state.shots.findIndex((shot) => shot.id === sourceId);
+  const targetIndex = state.shots.findIndex((shot) => shot.id === targetId);
+  if (sourceIndex === -1 || targetIndex === -1 || sourceIndex === targetIndex) {
+    clearSortStyles();
+    return;
+  }
+
+  const [movedShot] = state.shots.splice(sourceIndex, 1);
+  const insertionIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
+  state.shots.splice(insertionIndex, 0, movedShot);
+  clearSortStyles();
+  await persistState("镜头顺序已更新。");
+  render();
+}
+
+function clearSortStyles() {
+  document.querySelectorAll(".shot-card.sorting, .shot-card.drop-target").forEach((card) => {
+    card.classList.remove("sorting", "drop-target");
+  });
+}
+
+function archiveCurrentPrompt(shot) {
+  const prompt = shot.currentPrompt.trim();
+  if (!prompt) {
+    setStatus("当前 Prompt 为空，未存档。");
+    return false;
+  }
+
+  const lastEntry = shot.promptHistory[shot.promptHistory.length - 1];
+  if (lastEntry?.prompt === prompt) {
+    setStatus("当前 Prompt 与最近历史一致，未重复存档。");
+    return false;
+  }
+
+  pushHistoryEntry(shot, prompt, "手动保存");
+  shot.updatedAt = new Date().toISOString();
+  return true;
+}
+
+function pushHistoryEntry(shot, prompt, label) {
+  const lastEntry = shot.promptHistory[shot.promptHistory.length - 1];
+  if (lastEntry?.prompt === prompt) {
+    return false;
+  }
+
+  shot.promptHistory.push(createHistoryEntry(prompt, label));
+  return true;
+}
+
+function createShot() {
+  const now = new Date().toISOString();
+  return {
+    id: crypto.randomUUID(),
+    title: "",
+    directorNotes: "",
+    imageDataUrl: "",
+    currentPrompt: "",
+    promptHistory: [],
+    chatHistory: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+async function createShotFromFile(file) {
+  const shot = createShot();
+  shot.title = file.name.replace(/\.[^.]+$/, "");
+  shot.imageDataUrl = await optimizeImageFile(file);
+  return shot;
+}
+
+async function updateShotImage(shot, file, message) {
+  if (!file.type.startsWith("image/")) {
+    setStatus("请选择图片文件。");
+    return;
+  }
+
+  shot.imageDataUrl = await optimizeImageFile(file);
+  shot.updatedAt = new Date().toISOString();
+  await persistState(message);
+}
+
+function createHistoryEntry(prompt, label) {
+  return {
+    id: crypto.randomUUID(),
+    prompt,
+    label,
+    rating: 0,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function createChatEntry(role, content) {
+  return {
+    id: crypto.randomUUID(),
+    role,
+    content,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function isShotEmpty(shot) {
+  return !shot.title && !shot.directorNotes && !shot.imageDataUrl && !shot.currentPrompt && !shot.promptHistory.length && !shot.chatHistory.length;
+}
+
+function queuePersistState(message) {
+  setStatus("正在自动保存...");
+  if (persistTimer) {
+    window.clearTimeout(persistTimer);
+  }
+
+  persistTimer = window.setTimeout(async () => {
+    persistTimer = null;
+    await persistState(message);
+  }, PERSIST_DEBOUNCE_MS);
+}
+
+async function flushPendingPersist() {
+  if (!persistTimer) {
+    return;
+  }
+
+  window.clearTimeout(persistTimer);
+  persistTimer = null;
+  await persistState("本地更改已保存。");
+}
+
+async function persistState(message) {
+  try {
+    const db = await getDb();
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    tx.objectStore(STORE_NAME).put({ id: RECORD_KEY, payload: state });
+    await transactionDone(tx);
+    setStatus(message);
+  } catch (error) {
+    console.error(error);
+    setStatus("本地存档失败，请检查浏览器权限。");
+  }
+}
+
+async function loadState() {
+  try {
+    const db = await getDb();
+    const tx = db.transaction(STORE_NAME, "readonly");
+    const record = await requestResult(tx.objectStore(STORE_NAME).get(RECORD_KEY));
+    return normalizeState(record?.payload);
+  } catch (error) {
+    console.error(error);
+    return structuredClone(defaultState);
+  }
+}
+
+function normalizeState(input) {
+  if (!input) {
+    return structuredClone(defaultState);
+  }
+
+  const shots = Array.isArray(input.shots) ? input.shots : [];
+  const favorites = Array.isArray(input.favorites) ? input.favorites : [];
+  return {
+    settings: {
+      ...defaultState.settings,
+      ...input.settings,
+      provider: normalizeProvider(input?.settings?.provider, input?.settings?.model),
+      model: normalizeModel(input?.settings?.provider, input?.settings?.model),
+      apiKeys: normalizeApiKeys(input?.settings),
+    },
+    shots: shots.length ? shots.map(normalizeShot) : [createShot()],
+    favorites: favorites.map(normalizeFavorite),
+  };
+}
+
+function normalizeProvider(provider, model) {
+  if (provider && PROVIDER_CONFIGS[provider]) {
+    return provider;
+  }
+
+  if (model === "openai") {
+    return "openai";
+  }
+
+  return defaultState.settings.provider;
+}
+
+function normalizeModel(provider, model) {
+  const normalizedProvider = normalizeProvider(provider, model);
+  const providerConfig = PROVIDER_CONFIGS[normalizedProvider];
+
+  if (model && model !== "openai") {
+    return model;
+  }
+
+  return providerConfig.defaultModel;
+}
+
+function normalizeApiKeys(settings) {
+  const keys = { ...(settings?.apiKeys || {}) };
+  const provider = normalizeProvider(settings?.provider, settings?.model);
+  const legacyApiKey = String(settings?.apiKey || "").trim();
+
+  if (legacyApiKey && !keys[provider]) {
+    keys[provider] = legacyApiKey;
+  }
+
+  return keys;
+}
+
+function normalizeShot(input) {
+  const now = new Date().toISOString();
+  return {
+    id: input?.id || crypto.randomUUID(),
+    title: input?.title || "",
+    directorNotes: input?.directorNotes || "",
+    imageDataUrl: input?.imageDataUrl || "",
+    currentPrompt: input?.currentPrompt || "",
+    promptHistory: Array.isArray(input?.promptHistory) ? input.promptHistory.map(normalizeHistoryEntry) : [],
+    chatHistory: Array.isArray(input?.chatHistory) ? input.chatHistory : [],
+    createdAt: input?.createdAt || now,
+    updatedAt: input?.updatedAt || input?.createdAt || now,
+  };
+}
+
+function normalizeFavorite(input) {
+  const now = new Date().toISOString();
+  return {
+    id: input?.id || crypto.randomUUID(),
+    shotId: input?.shotId || "",
+    title: input?.title || "",
+    directorNotes: input?.directorNotes || "",
+    imageDataUrl: input?.imageDataUrl || "",
+    currentPrompt: input?.currentPrompt || "",
+    promptHistory: Array.isArray(input?.promptHistory) ? input.promptHistory.map(normalizeHistoryEntry) : [],
+    tags: normalizeFavoriteTags(input?.tags),
+    chatHistory: Array.isArray(input?.chatHistory) ? input.chatHistory : [],
+    favoritedAt: input?.favoritedAt || now,
+    updatedAt: input?.updatedAt || now,
+  };
+}
+
+function normalizeFavoriteTags(input) {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+
+  return [...new Set(input.map((tag) => String(tag || "").trim()).filter(Boolean))];
+}
+
+function parseFavoriteTags(input) {
+  return [...new Set(String(input || "")
+    .split(/[,，;；\n]/)
+    .map((tag) => tag.trim())
+    .filter(Boolean))];
+}
+
+async function saveFavoriteTags(favoriteId, rawValue) {
+  const target = state.favorites.find((item) => item.id === favoriteId);
+  if (!target) {
+    return;
+  }
+
+  const appendedTags = parseFavoriteTags(rawValue);
+  if (!appendedTags.length) {
+    return;
+  }
+
+  const nextTags = [...new Set([...(target.tags || []), ...appendedTags])];
+  const currentTags = target.tags || [];
+  if (currentTags.join("|") === nextTags.join("|")) {
+    return;
+  }
+
+  target.tags = nextTags;
+  await persistState("收藏标签已更新。");
+  renderFavoriteModal(target);
+  populateFavoriteTagFilter();
+}
+
+function renderFavoriteTags(tags) {
+  if (!tags.length) {
+    return '<span class="meta">未设置标签</span>';
+  }
+
+  return tags.map((tag) => `
+    <span class="favorite-tag">
+      <span>${escapeHtml(tag)}</span>
+      <button class="favorite-tag-remove" type="button" data-tag-value="${escapeHtml(tag)}" aria-label="删除标签 ${escapeHtml(tag)}">×</button>
+    </span>
+  `).join("");
+}
+
+async function removeFavoriteTag(favoriteId, tagValue) {
+  const target = state.favorites.find((item) => item.id === favoriteId);
+  if (!target || !tagValue) {
+    return;
+  }
+
+  const nextTags = (target.tags || []).filter((tag) => tag !== tagValue);
+  if (nextTags.length === (target.tags || []).length) {
+    return;
+  }
+
+  target.tags = nextTags;
+  await persistState("收藏标签已更新。");
+  renderFavoriteModal(target);
+  populateFavoriteTagFilter();
+}
+
+function populateFavoriteTagFilter() {
+  const tags = [...new Set(state.favorites.flatMap((favorite) => favorite.tags || []))].sort((a, b) => a.localeCompare(b, "zh-CN"));
+  const options = ['<option value="">全部标签</option>']
+    .concat(tags.map((tag) => `<option value="${escapeHtml(tag.toLowerCase())}">${escapeHtml(tag)}</option>`));
+  elements.favoritesTagFilter.innerHTML = options.join("");
+}
+
+function normalizeHistoryEntry(input) {
+  return {
+    id: input?.id || crypto.randomUUID(),
+    prompt: input?.prompt || "",
+    label: input?.label || "手动保存",
+    rating: Math.max(0, Math.min(3, Number(input?.rating) || 0)),
+    createdAt: input?.createdAt || new Date().toISOString(),
+  };
+}
+
+function getDb() {
+  if (!dbPromise) {
+    dbPromise = new Promise((resolve, reject) => {
+      const request = indexedDB.open(DB_NAME, 1);
+
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains(STORE_NAME)) {
+          db.createObjectStore(STORE_NAME, { keyPath: "id" });
+        }
+      };
+
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error("IndexedDB 打开失败。"));
+    });
+  }
+
+  return dbPromise;
+}
+
+function requestResult(request) {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("IndexedDB 读取失败。"));
+  });
+}
+
+function transactionDone(transaction) {
+  return new Promise((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error || new Error("IndexedDB 写入失败。"));
+    transaction.onabort = () => reject(transaction.error || new Error("IndexedDB 事务中断。"));
+  });
+}
+
+function syncSettingsInputs() {
+  elements.globalDirection.value = state.settings.globalDirection || "";
+}
+
+function getCurrentProviderConfig() {
+  return PROVIDER_CONFIGS[state.settings.provider] || PROVIDER_CONFIGS[defaultState.settings.provider];
+}
+
+function getCurrentApiKey() {
+  const provider = getCurrentProviderConfig();
+  const providerKey = String(state.settings.apiKeys?.[provider.id] || "").trim();
+  if (providerKey) {
+    return providerKey;
+  }
+
+  const hasScopedKeys = Object.keys(state.settings.apiKeys || {}).length > 0;
+  if (!hasScopedKeys) {
+    return String(state.settings.apiKey || "").trim();
+  }
+
+  return "";
+}
+
+function getShotById(shotId) {
+  return state.shots.find((shot) => shot.id === shotId);
+}
+
+function setStatus(message) {
+  elements.statusText.textContent = message;
+}
+
+function formatTime(isoString) {
+  return new Date(isoString).toLocaleString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function openSettingsModal() {
+  uiState.isEditingApiKey = !getCurrentApiKey();
+  renderSettingsModal();
+  elements.settingsModal.hidden = false;
+}
+
+function closeSettingsModal() {
+  uiState.isEditingApiKey = false;
+  elements.settingsModal.hidden = true;
+}
+
+function renderSettingsModal() {
+  const provider = getCurrentProviderConfig();
+  const currentApiKey = getCurrentApiKey();
+  const hasApiKey = Boolean(currentApiKey);
+  const shouldEditApiKey = uiState.isEditingApiKey || !hasApiKey;
+  const maskedApiKey = hasApiKey ? maskApiKey(currentApiKey) : "未设置";
+  const providerChipsMarkup = Object.values(PROVIDER_CONFIGS)
+    .map((item) => {
+      const isActive = provider.id === item.id;
+      return `<button class="ghost-button model-preset-button${isActive ? " is-active" : ""}" type="button" data-provider-id="${escapeHtml(item.id)}">${escapeHtml(item.label)}</button>`;
+    })
+    .join("");
+  const modelOptionsMarkup = provider.modelSuggestions
+    .map((item) => `<option value="${escapeHtml(item)}">${escapeHtml(item)}</option>`)
+    .join("");
+
+  elements.settingsModalContent.innerHTML = `
+    <article class="shot-card settings-card">
+      <div class="panel-header">
+        <h2>模型与 API 设置</h2>
+        <div class="history-actions">
+          <button class="ghost-button settings-close-button" type="button">关闭</button>
+        </div>
+      </div>
+      <div class="settings-grid">
+        <section class="prompt-panel settings-panel">
+          <div class="favorite-block">
+            <h3>${escapeHtml(provider.apiKeyLabel)}</h3>
+            ${shouldEditApiKey ? `
+              <label class="field compact">
+                <span>输入后仅本地保存，保存后只显示掩码</span>
+                <input class="settings-api-key-input" type="password" placeholder="输入 ${escapeHtml(provider.apiKeyLabel)}" autocomplete="off">
+              </label>
+              <div class="card-actions">
+                <button class="secondary-button settings-save-api-button" type="button">保存 API Key</button>
+                ${hasApiKey ? '<button class="ghost-button settings-cancel-api-button" type="button">取消</button>' : ""}
+              </div>
+            ` : `
+              <div class="secure-field">
+                <span class="secure-label">已加密显示</span>
+                <div class="secure-value" tabindex="0">${escapeHtml(maskedApiKey)}</div>
+              </div>
+              <div class="card-actions">
+                <button class="ghost-button settings-edit-api-button" type="button">重新输入</button>
+              </div>
+            `}
+          </div>
+        </section>
+        <section class="prompt-panel settings-panel">
+          <div class="favorite-block">
+            <h3>服务商与模型</h3>
+            <div class="model-presets">${providerChipsMarkup}</div>
+            <label class="field compact">
+              <span>当前用于生成和修改 Prompt 的模型名</span>
+              <input class="settings-model-input" type="text" value="${escapeHtml(state.settings.model || defaultState.settings.model)}" list="settingsModelOptions" autocomplete="off">
+              <datalist id="settingsModelOptions">${modelOptionsMarkup}</datalist>
+            </label>
+          </div>
+        </section>
+      </div>
+    </article>
+  `;
+
+  const closeButton = elements.settingsModalContent.querySelector(".settings-close-button");
+  closeButton.addEventListener("click", closeSettingsModal);
+
+  const modelInput = elements.settingsModalContent.querySelector(".settings-model-input");
+  modelInput.addEventListener("input", (event) => {
+    state.settings.model = event.target.value.trim() || provider.defaultModel;
+    queuePersistState("模型设置已更新。");
+  });
+  elements.settingsModalContent.querySelectorAll(".model-preset-button").forEach((button) => {
+    button.addEventListener("click", () => {
+      const nextProviderId = button.dataset.providerId;
+      if (!nextProviderId || !PROVIDER_CONFIGS[nextProviderId]) {
+        return;
+      }
+
+      state.settings.provider = nextProviderId;
+      state.settings.model = PROVIDER_CONFIGS[nextProviderId].defaultModel;
+      uiState.isEditingApiKey = !String(state.settings.apiKeys?.[nextProviderId] || "").trim();
+      queuePersistState("服务商设置已更新。");
+      renderSettingsModal();
+    });
+  });
+
+  if (shouldEditApiKey) {
+    const apiInput = elements.settingsModalContent.querySelector(".settings-api-key-input");
+    const saveButton = elements.settingsModalContent.querySelector(".settings-save-api-button");
+    const cancelButton = elements.settingsModalContent.querySelector(".settings-cancel-api-button");
+
+    saveButton.addEventListener("click", () => {
+      const nextApiKey = apiInput.value.trim();
+      if (!nextApiKey) {
+        setStatus("API Key 不能为空。");
+        return;
+      }
+
+      state.settings.apiKeys = {
+        ...(state.settings.apiKeys || {}),
+        [provider.id]: nextApiKey,
+      };
+      state.settings.apiKey = nextApiKey;
+      uiState.isEditingApiKey = false;
+      queuePersistState(`${provider.apiKeyLabel} 已本地保存。`);
+      renderSettingsModal();
+    });
+
+    cancelButton?.addEventListener("click", () => {
+      uiState.isEditingApiKey = false;
+      renderSettingsModal();
+    });
+    return;
+  }
+
+  const secureValue = elements.settingsModalContent.querySelector(".secure-value");
+  ["copy", "cut", "dragstart", "contextmenu"].forEach((eventName) => {
+    secureValue.addEventListener(eventName, (event) => {
+      event.preventDefault();
+    });
+  });
+  secureValue.addEventListener("selectstart", (event) => {
+    event.preventDefault();
+  });
+
+  elements.settingsModalContent.querySelector(".settings-edit-api-button").addEventListener("click", () => {
+    uiState.isEditingApiKey = true;
+    renderSettingsModal();
+  });
+}
+
+function maskApiKey(apiKey) {
+  if (!apiKey) {
+    return "";
+  }
+
+  if (apiKey.length <= 8) {
+    return `${apiKey.slice(0, 2)}••••`;
+  }
+
+  return `${apiKey.slice(0, 4)}••••••••${apiKey.slice(-4)}`;
+}
+
+function exportWorkspace() {
+  const payload = {
+    exportedAt: new Date().toISOString(),
+    app: "shot-prompt-workspace",
+    workspace: state,
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `shot-prompt-workspace-${formatExportTime(new Date())}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
+  setStatus("工作区已导出。");
+}
+
+function exportAllPrompts() {
+  const content = state.shots
+    .map((shot, index) => {
+      const title = shot.title.trim() || `Shot ${String(index + 1).padStart(2, "0")}`;
+      return [
+        `# ${title}`,
+        shot.directorNotes ? `导演讲戏：${shot.directorNotes}` : "",
+        "",
+        shot.currentPrompt.trim() || "暂无 Prompt",
+        "",
+      ].filter(Boolean).join("\n");
+    })
+    .join("\n\n");
+
+  const blob = new Blob([content], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `shot-prompts-${formatExportTime(new Date())}.md`;
+  link.click();
+  URL.revokeObjectURL(url);
+  setStatus("全部 Prompt 已导出。");
+}
+
+async function importWorkspace(file) {
+  const text = await readTextFile(file);
+  let payload;
+
+  try {
+    payload = JSON.parse(text);
+  } catch (error) {
+    throw new Error("导入文件不是有效的 JSON。");
+  }
+
+  const imported = payload?.workspace || payload;
+  const normalized = normalizeState(imported);
+  if (!normalized.shots.length) {
+    throw new Error("导入文件中没有可用镜头数据。");
+  }
+
+  return normalized.shots;
+}
+
+function formatExportTime(date) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+    "-",
+    pad(date.getHours()),
+    pad(date.getMinutes()),
+    pad(date.getSeconds()),
+  ].join("");
+}
+
+function readTextFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("读取导入文件失败。"));
+    reader.readAsText(file);
+  });
+}
+
+async function optimizeImageFile(file) {
+  const image = await loadImageFromFile(file);
+  const { width, height } = getOptimizedImageSize(image.width, image.height);
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("浏览器不支持图片压缩。");
+  }
+
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, width, height);
+  context.drawImage(image, 0, 0, width, height);
+  return canvasToDataUrl(canvas, IMAGE_OUTPUT_MIME, IMAGE_OUTPUT_QUALITY);
+}
+
+function loadImageFromFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error("图片解码失败。"));
+      image.src = String(reader.result || "");
+    };
+    reader.onerror = () => reject(new Error("读取图片失败。"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function getOptimizedImageSize(width, height) {
+  const longestSide = Math.max(width, height);
+  if (!longestSide || longestSide <= IMAGE_MAX_DIMENSION) {
+    return { width, height };
+  }
+
+  const scale = IMAGE_MAX_DIMENSION / longestSide;
+  return {
+    width: Math.max(1, Math.round(width * scale)),
+    height: Math.max(1, Math.round(height * scale)),
+  };
+}
+
+function canvasToDataUrl(canvas, mimeType, quality) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error("图片压缩失败。"));
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(new Error("图片压缩结果读取失败。"));
+      reader.readAsDataURL(blob);
+    }, mimeType, quality);
+  });
+}
+
+function setButtonLoading(button, label) {
+  button.disabled = true;
+  if (!button.dataset.originalLabel) {
+    button.dataset.originalLabel = button.textContent;
+  }
+  button.textContent = label;
+}
+
+function resetButtonLoading(button, fallbackLabel) {
+  button.disabled = false;
+  button.textContent = button.dataset.originalLabel || fallbackLabel;
+  delete button.dataset.originalLabel;
+}
+
+function escapeHtml(input) {
+  return String(input)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}

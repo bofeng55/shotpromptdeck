@@ -1,0 +1,238 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>镜头 Prompt 工作台</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css?v=20260308b">
+</head>
+<body>
+  <div class="shell">
+    <div class="app-header">
+      <nav class="view-switcher" aria-label="页面切换">
+        <button id="workspaceTab" class="view-tab is-active" type="button">工作台</button>
+        <button id="favoritesTab" class="view-tab" type="button">收藏夹</button>
+      </nav>
+      <button id="settingsButton" class="ghost-button settings-trigger" type="button">模型与 API 设置</button>
+    </div>
+
+    <header class="hero">
+      <div>
+        <p class="eyebrow">AI Video Prompt Workspace</p>
+        <h1 class="hero-title">
+          <span id="heroTitleLine1">视频提示词</span>
+          <span id="heroTitleLine2">工作台</span>
+        </h1>
+        <p class="subtitle">
+          <span id="heroSubtitleLine1">为镜头手写或生成视频提示词，</span>
+          <span id="heroSubtitleLine2">并在每个镜头旁与AI对话持续修改、迭代、归档。</span>
+        </p>
+      </div>
+      <div id="workspaceControls" class="hero-panel">
+        <div class="hero-settings-grid">
+          <label class="field hero-field-wide">
+            <span>全局风格备注</span>
+            <textarea id="globalDirection" rows="3" placeholder="例如：偏电影感，镜头运动克制，强调自然光、颗粒、真实皮肤质感"></textarea>
+          </label>
+        </div>
+        <div class="hero-actions">
+          <section class="hero-actions-group">
+            <p class="hero-actions-label">创建与生成</p>
+            <div class="hero-actions-row hero-actions-primary">
+              <label class="upload-button">
+                <input id="imageUpload" type="file" accept="image/*" multiple>
+                批量上传镜头图
+              </label>
+              <div class="hero-generate-panel">
+                <p class="hero-inline-label">批量生成模式</p>
+                <select id="batchMode">
+                  <option value="empty">只生成空 Prompt 镜头</option>
+                  <option value="all">重写全部有图镜头</option>
+                </select>
+                <button id="batchGenerateButton" class="secondary-button" type="button">批量生成 Prompt</button>
+              </div>
+            </div>
+          </section>
+          <section class="hero-actions-group">
+            <p class="hero-actions-label">导出与整理</p>
+            <div class="hero-actions-row hero-actions-secondary">
+              <button id="exportPromptsButton" class="ghost-button" type="button">导出全部 Prompt</button>
+              <button id="exportButton" class="ghost-button" type="button">导出工作区</button>
+              <label class="ghost-button import-button">
+                <input id="importInput" type="file" accept="application/json">
+                导入工作区
+              </label>
+              <button id="clearButton" class="ghost-button danger-soft" type="button">清空工作台记录</button>
+            </div>
+          </section>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section id="workspaceView">
+        <section id="workspaceSummary" class="summary-bar">
+          <div>
+            <strong id="shotCount">0</strong>
+            <span>个镜头</span>
+          </div>
+          <div>
+            <strong id="historyCount">0</strong>
+            <span>条 Prompt归档</span>
+          </div>
+          <div>
+            <strong id="chatCount">0</strong>
+            <span>条修改对话</span>
+          </div>
+          <p id="statusText" class="status-text">本地自动存档已开启。</p>
+        </section>
+        <section id="shotsContainer" class="shots-container"></section>
+      </section>
+
+      <section id="favoritesView" hidden>
+        <section class="summary-bar">
+          <div>
+            <strong id="favoriteCount">0</strong>
+            <span>个镜头</span>
+          </div>
+          <div>
+            <strong id="favoriteHistoryCount">0</strong>
+            <span>条 Prompt归档</span>
+          </div>
+          <label class="field compact favorites-search-field">
+            <span>检索收藏</span>
+            <input id="favoritesSearch" type="text" placeholder="搜索标题、导演讲戏、提示词">
+          </label>
+          <label class="field compact favorites-filter-field">
+            <span>标签筛选</span>
+            <select id="favoritesTagFilter">
+              <option value="">全部标签</option>
+            </select>
+          </label>
+          <p class="status-text">收藏夹一共有以上内容，保存在当前浏览器本地。</p>
+        </section>
+        <section id="favoritesContainer" class="favorites-grid"></section>
+      </section>
+
+      <template id="shotTemplate">
+        <article class="shot-card">
+          <div class="shot-order"></div>
+          <div class="shot-main">
+            <section class="image-panel">
+              <div class="image-frame">
+                <img class="shot-image" alt="镜头图预览">
+                <div class="image-empty">未上传镜头图</div>
+              </div>
+              <label class="field compact">
+                <span>镜头标题</span>
+                <input class="shot-title" type="text" placeholder="例如：s01c001">
+              </label>
+              <label class="field compact">
+                <span>导演讲戏</span>
+                <textarea class="director-notes" rows="5" placeholder="例如：这一镜主打人物迟疑感，情绪要收着，眼神先躲再回看，节奏慢半拍"></textarea>
+              </label>
+              <label class="field compact">
+                <span>替换图片</span>
+                <input class="shot-image-input" type="file" accept="image/*">
+              </label>
+              <div class="card-actions stack">
+                <button class="secondary-button generate-button" type="button">AI 生成 Prompt</button>
+              </div>
+            </section>
+
+            <section class="prompt-panel">
+              <div class="panel-header">
+                <h2>视频 Prompt</h2>
+                <span class="meta current-version-label"></span>
+              </div>
+              <label class="field">
+                <span>当前 Prompt</span>
+                <textarea class="shot-prompt" rows="12" placeholder="可先手写，也可直接让 AI 基于图片生成"></textarea>
+              </label>
+              <div class="card-actions">
+                <button class="secondary-button save-button" type="button">保存当前版本</button>
+                <button class="ghost-button copy-button" type="button">复制 Prompt</button>
+              </div>
+              <div class="history-panel">
+                <div class="panel-header">
+                  <h3>Prompt归档</h3>
+                  <span class="meta history-count"></span>
+                </div>
+                <div class="history-list"></div>
+              </div>
+            </section>
+
+            <section class="chat-panel">
+              <div class="panel-header">
+                <h2>修改对话</h2>
+                <span class="meta">基于当前 Prompt 连续迭代</span>
+              </div>
+              <div class="chat-log"></div>
+              <label class="field">
+                <span>你的修改要求</span>
+                <textarea class="feedback-input" rows="5" placeholder="例如：改为手持运镜；镜头更有冲击力；角色表演更克制；补充运镜、光线、动作"></textarea>
+              </label>
+              <div class="card-actions">
+                <button class="secondary-button revise-button" type="button">让 AI 修改 Prompt</button>
+                <button class="ghost-button clear-chat-button" type="button">清空本镜头对话</button>
+              </div>
+            </section>
+          </div>
+
+          <footer class="shot-footer">
+            <button class="ghost-button favorite-button favorite-accent-button" type="button">收藏此镜头</button>
+            <button class="ghost-button insert-above-button" type="button">上方插入镜头</button>
+            <button class="ghost-button insert-below-button" type="button">下方插入镜头</button>
+            <button class="ghost-button delete-button danger" type="button">删除此镜头</button>
+          </footer>
+        </article>
+      </template>
+
+      <template id="favoriteTemplate">
+        <article class="favorite-tile">
+          <button class="favorite-open-button" type="button">
+            <div class="image-frame favorite-image-frame">
+              <img class="shot-image favorite-image" alt="收藏镜头图预览">
+              <div class="image-empty">未上传镜头图</div>
+            </div>
+            <div class="favorite-meta-list">
+              <p class="favorite-title"></p>
+            </div>
+          </button>
+          <div class="favorite-tile-actions">
+            <button class="ghost-button move-to-workspace-button" type="button">移入工作台</button>
+            <button class="ghost-button unfavorite-button danger" type="button">移出收藏</button>
+          </div>
+        </article>
+      </template>
+    </main>
+  </div>
+
+  <div id="favoriteModal" class="detail-modal" hidden>
+    <div class="detail-modal-backdrop"></div>
+    <div class="detail-modal-dialog" role="dialog" aria-modal="true" aria-label="收藏详情">
+      <div id="favoriteModalContent"></div>
+    </div>
+  </div>
+
+  <div id="settingsModal" class="detail-modal" hidden>
+    <div class="detail-modal-backdrop"></div>
+    <div class="detail-modal-dialog settings-modal-dialog" role="dialog" aria-modal="true" aria-label="模型与 API 设置">
+      <div id="settingsModalContent"></div>
+    </div>
+  </div>
+
+  <div id="lightbox" class="lightbox" hidden>
+    <div class="lightbox-backdrop"></div>
+    <div class="lightbox-dialog" role="dialog" aria-modal="true" aria-label="图片放大预览">
+      <button id="lightboxClose" class="lightbox-close" type="button" aria-label="关闭放大预览">关闭</button>
+      <img id="lightboxImage" class="lightbox-image" alt="放大镜头图">
+    </div>
+  </div>
+
+  <script src="./app.js?v=20260308b"></script>
+</body>
+</html>
