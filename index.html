@@ -34,7 +34,7 @@
       <div id="workspaceControls" class="hero-panel">
         <div class="hero-settings-grid">
           <label class="field hero-field-wide">
-            <span>全局风格备注</span>
+            <span>全局提示词风格备注</span>
             <textarea id="globalDirection" rows="3" placeholder="例如：偏电影感，镜头运动克制，强调自然光、颗粒、真实皮肤质感"></textarea>
           </label>
         </div>
@@ -112,7 +112,36 @@
               <option value="">全部标签</option>
             </select>
           </label>
+          <label class="field compact favorites-batch-field">
+            <span>批量处理</span>
+            <button id="favoritesBatchToggleButton" class="ghost-button" type="button">批量处理</button>
+          </label>
           <p class="status-text">收藏夹一共有以上内容，保存在当前浏览器本地。</p>
+        </section>
+        <section id="favoritesBulkBar" class="favorites-bulk-bar" hidden>
+          <div class="favorites-bulk-main">
+            <div class="favorites-bulk-meta">
+              <strong id="favoritesSelectedCount">0</strong>
+              <span>已选收藏</span>
+            </div>
+            <p class="favorites-bulk-hint">批量处理模式下，点击收藏卡片即可选中或取消。</p>
+          </div>
+          <div class="favorites-bulk-actions">
+            <div class="favorites-bulk-row favorites-bulk-row-tags">
+              <button id="favoritesSelectAllButton" class="ghost-button" type="button">全选</button>
+              <input id="favoritesBulkTagsInput" class="favorites-bulk-tags-input" type="text" placeholder="输入标签后批量添加，例如：第一场，s01，角色名，奇幻">
+              <button id="favoritesBulkTagButton" class="ghost-button favorite-accent-button" type="button">添加标签</button>
+            </div>
+            <div class="favorites-bulk-row favorites-bulk-row-actions">
+              <button id="favoritesBulkExportButton" class="ghost-button" type="button">导出选中</button>
+              <label class="ghost-button import-button favorites-import-button">
+                <input id="favoritesImportInput" type="file" accept="application/json">
+                导入收藏
+              </label>
+              <button id="favoritesBulkMoveButton" class="ghost-button" type="button">移入工作台</button>
+              <button id="favoritesBulkDeleteButton" class="ghost-button danger" type="button">删除</button>
+            </div>
+          </div>
         </section>
         <section id="favoritesContainer" class="favorites-grid"></section>
       </section>
@@ -122,9 +151,23 @@
           <div class="shot-order"></div>
           <div class="shot-main">
             <section class="image-panel">
-              <div class="image-frame">
-                <img class="shot-image" alt="镜头图预览">
-                <div class="image-empty">未上传镜头图</div>
+              <div class="media-mode-badge"></div>
+              <div class="single-media-editor">
+                <div class="image-frame">
+                  <img class="shot-image" alt="镜头图预览">
+                  <input class="shot-image-input hidden-file-input" type="file" accept="image/*">
+                  <div class="image-empty">未上传镜头图</div>
+                  <button class="image-delete-button" type="button" aria-label="删除图片">×</button>
+                </div>
+              </div>
+              <div class="group-media-editor" hidden>
+                <div class="group-upload-frame image-frame">
+                  <input class="group-images-input" type="file" accept="image/*" multiple>
+                  <div class="image-empty">
+                    <span class="drag-tip">拖拽单张或多张图片到这里，或点击上传</span>
+                  </div>
+                </div>
+                <div class="reference-frames-list"></div>
               </div>
               <label class="field compact">
                 <span>镜头标题</span>
@@ -133,10 +176,6 @@
               <label class="field compact">
                 <span>导演讲戏</span>
                 <textarea class="director-notes" rows="5" placeholder="例如：这一镜主打人物迟疑感，情绪要收着，眼神先躲再回看，节奏慢半拍"></textarea>
-              </label>
-              <label class="field compact">
-                <span>替换图片</span>
-                <input class="shot-image-input" type="file" accept="image/*">
               </label>
               <div class="card-actions stack">
                 <button class="secondary-button generate-button" type="button">AI 生成 Prompt</button>
@@ -183,10 +222,19 @@
           </div>
 
           <footer class="shot-footer">
-            <button class="ghost-button favorite-button favorite-accent-button" type="button">收藏此镜头</button>
-            <button class="ghost-button insert-above-button" type="button">上方插入镜头</button>
-            <button class="ghost-button insert-below-button" type="button">下方插入镜头</button>
-            <button class="ghost-button delete-button danger" type="button">删除此镜头</button>
+            <div class="shot-footer-group shot-footer-side shot-footer-favorite">
+              <button class="ghost-button favorite-button favorite-accent-button" type="button">收藏此镜头</button>
+              <button class="ghost-button duplicate-favorite-button favorite-accent-button" type="button" hidden>新建收藏</button>
+            </div>
+            <div class="shot-footer-group insert-actions-grid">
+              <button class="ghost-button insert-above-button" type="button">上插镜头</button>
+              <button class="ghost-button insert-group-above-button" type="button">上插镜头组</button>
+              <button class="ghost-button insert-below-button" type="button">下插镜头</button>
+              <button class="ghost-button insert-group-below-button" type="button">下插镜头组</button>
+            </div>
+            <div class="shot-footer-group shot-footer-side shot-footer-danger">
+              <button class="ghost-button delete-button danger" type="button">删除此镜头</button>
+            </div>
           </footer>
         </article>
       </template>
@@ -204,7 +252,7 @@
           </button>
           <div class="favorite-tile-actions">
             <button class="ghost-button move-to-workspace-button" type="button">移入工作台</button>
-            <button class="ghost-button unfavorite-button danger" type="button">移出收藏</button>
+            <button class="ghost-button unfavorite-button danger" type="button">删除</button>
           </div>
         </article>
       </template>

@@ -26,6 +26,16 @@ const PROVIDER_CONFIGS = {
     baseUrl: "https://api.openai.com/v1",
     temperature: 0.4,
   },
+  custom: {
+    id: "custom",
+    label: "自定义 API",
+    apiKeyLabel: "自定义 API Key",
+    defaultModel: "",
+    modelSuggestions: [],
+    requestMode: "responses",
+    baseUrl: "",
+    temperature: 0.4,
+  },
 };
 
 const defaultState = {
@@ -35,6 +45,13 @@ const defaultState = {
     apiKeys: {},
     model: PROVIDER_CONFIGS.gemini.defaultModel,
     globalDirection: "",
+    customProvider: {
+      label: "自定义 API",
+      baseUrl: "",
+      model: "",
+      apiKeyLabel: "自定义 API Key",
+      requestMode: "responses",
+    },
   },
   shots: [],
   favorites: [],
@@ -70,6 +87,16 @@ const elements = {
   favoriteHistoryCount: document.querySelector("#favoriteHistoryCount"),
   favoritesSearch: document.querySelector("#favoritesSearch"),
   favoritesTagFilter: document.querySelector("#favoritesTagFilter"),
+  favoritesBatchToggleButton: document.querySelector("#favoritesBatchToggleButton"),
+  favoritesBulkBar: document.querySelector("#favoritesBulkBar"),
+  favoritesSelectedCount: document.querySelector("#favoritesSelectedCount"),
+  favoritesSelectAllButton: document.querySelector("#favoritesSelectAllButton"),
+  favoritesBulkTagsInput: document.querySelector("#favoritesBulkTagsInput"),
+  favoritesBulkTagButton: document.querySelector("#favoritesBulkTagButton"),
+  favoritesBulkExportButton: document.querySelector("#favoritesBulkExportButton"),
+  favoritesImportInput: document.querySelector("#favoritesImportInput"),
+  favoritesBulkMoveButton: document.querySelector("#favoritesBulkMoveButton"),
+  favoritesBulkDeleteButton: document.querySelector("#favoritesBulkDeleteButton"),
   favoriteModal: document.querySelector("#favoriteModal"),
   favoriteModalContent: document.querySelector("#favoriteModalContent"),
   settingsModal: document.querySelector("#settingsModal"),
@@ -91,8 +118,10 @@ const uiState = {
   draggingShotId: null,
   currentView: "workspace",
   selectedFavoriteId: null,
+  selectedFavoriteIds: [],
   favoriteSearchTerm: "",
   favoriteTagFilter: "",
+  isFavoriteBatchMode: false,
   isEditingApiKey: false,
 };
 
@@ -132,6 +161,80 @@ function bindGlobalEvents() {
   elements.favoritesTagFilter.addEventListener("change", (event) => {
     uiState.favoriteTagFilter = event.target.value.trim().toLowerCase();
     render();
+  });
+
+  elements.favoritesBatchToggleButton.addEventListener("click", () => {
+    uiState.isFavoriteBatchMode = !uiState.isFavoriteBatchMode;
+    if (!uiState.isFavoriteBatchMode) {
+      uiState.selectedFavoriteIds = [];
+    }
+    render();
+  });
+
+  elements.favoritesSelectAllButton.addEventListener("click", () => {
+    const visibleIds = getFilteredFavorites().map((favorite) => favorite.id);
+    const selectedVisibleIds = visibleIds.filter((id) => uiState.selectedFavoriteIds.includes(id));
+    if (visibleIds.length && selectedVisibleIds.length === visibleIds.length) {
+      uiState.selectedFavoriteIds = uiState.selectedFavoriteIds.filter((id) => !visibleIds.includes(id));
+    } else {
+      uiState.selectedFavoriteIds = [...new Set([...uiState.selectedFavoriteIds, ...visibleIds])];
+    }
+    render();
+  });
+
+  elements.favoritesBulkTagButton.addEventListener("click", async () => {
+    await addTagsToFavorites(uiState.selectedFavoriteIds, elements.favoritesBulkTagsInput.value);
+    elements.favoritesBulkTagsInput.value = "";
+  });
+
+  elements.favoritesBulkTagsInput.addEventListener("keydown", async (event) => {
+    if (event.key !== "Enter") {
+      return;
+    }
+
+    event.preventDefault();
+    await addTagsToFavorites(uiState.selectedFavoriteIds, event.currentTarget.value);
+    event.currentTarget.value = "";
+  });
+
+  elements.favoritesBulkMoveButton.addEventListener("click", async () => {
+    await moveFavoritesToWorkspaceBatch(uiState.selectedFavoriteIds);
+  });
+
+  elements.favoritesBulkExportButton.addEventListener("click", async () => {
+    await flushPendingPersist();
+    exportFavorites(uiState.selectedFavoriteIds);
+  });
+
+  elements.favoritesImportInput.addEventListener("change", async (event) => {
+    const [file] = Array.from(event.target.files || []);
+    if (!file) {
+      return;
+    }
+
+    try {
+      const importedFavorites = await importFavorites(file);
+      if (!importedFavorites.length) {
+        throw new Error("导入文件中没有可用收藏数据。");
+      }
+
+      const confirmed = window.confirm(`确认导入 ${importedFavorites.length} 个收藏吗？这会追加到当前收藏夹。`);
+      if (!confirmed) {
+        return;
+      }
+
+      state.favorites.push(...importedFavorites);
+      await persistState(`已导入 ${importedFavorites.length} 个收藏。`);
+      render();
+    } catch (error) {
+      setStatus(error.message || "导入收藏失败。");
+    } finally {
+      event.target.value = "";
+    }
+  });
+
+  elements.favoritesBulkDeleteButton.addEventListener("click", async () => {
+    await deleteFavoritesByIds(uiState.selectedFavoriteIds);
   });
 
   elements.globalDirection.addEventListener("input", async (event) => {
@@ -244,9 +347,15 @@ function render() {
   state.shots.forEach((shot, index) => {
     const fragment = elements.shotTemplate.content.cloneNode(true);
     const card = fragment.querySelector(".shot-card");
+    const mediaModeBadge = fragment.querySelector(".media-mode-badge");
+    const singleMediaEditor = fragment.querySelector(".single-media-editor");
+    const groupMediaEditor = fragment.querySelector(".group-media-editor");
+    const groupUploadFrame = fragment.querySelector(".group-upload-frame");
     const imageFrame = fragment.querySelector(".image-frame");
     const image = fragment.querySelector(".shot-image");
     const imageEmpty = fragment.querySelector(".image-empty");
+    const groupImagesInput = fragment.querySelector(".group-images-input");
+    const referenceFramesList = fragment.querySelector(".reference-frames-list");
     const order = fragment.querySelector(".shot-order");
     const titleInput = fragment.querySelector(".shot-title");
     const directorNotesInput = fragment.querySelector(".director-notes");
@@ -258,27 +367,56 @@ function render() {
     const currentVersionLabel = fragment.querySelector(".current-version-label");
     const historyCount = fragment.querySelector(".history-count");
     const favoriteButton = fragment.querySelector(".favorite-button");
+    const duplicateFavoriteButton = fragment.querySelector(".duplicate-favorite-button");
 
-    order.textContent = `Shot ${String(index + 1).padStart(2, "0")}`;
+    const isGroupShot = shot.type === "group";
+    order.textContent = `${isGroupShot ? "Group" : "Shot"} ${String(index + 1).padStart(2, "0")}`;
     order.title = "拖拽以调整镜头顺序";
     card.dataset.shotId = shot.id;
+    card.classList.toggle("is-group-shot", isGroupShot);
     bindShotSortEvents(card, order, shot.id);
     titleInput.value = shot.title;
+    titleInput.placeholder = isGroupShot ? "例如：s02c003-s02c005" : "例如：s01c001";
     directorNotesInput.value = shot.directorNotes || "";
+    directorNotesInput.placeholder = isGroupShot
+      ? "例如：这一组镜头从人物走入空间开始，先交代环境，再切到动作细节，最后回到人物情绪，整体节奏由慢到快，镜头之间要连贯"
+      : "例如：这一镜主打人物迟疑感，情绪要收着，眼神先躲再回看，节奏慢半拍";
     promptInput.value = shot.currentPrompt;
-    imageEmpty.innerHTML = '<span class="drag-tip">拖拽图片到这里，或点击上传</span>';
+    mediaModeBadge.textContent = isGroupShot ? "镜头组 / 多图参考" : "单镜头 / 图生视频";
+    singleMediaEditor.hidden = isGroupShot;
+    groupMediaEditor.hidden = !isGroupShot;
 
-    if (shot.imageDataUrl) {
-      imageFrame.classList.add("has-image");
-      image.src = shot.imageDataUrl;
-      image.alt = shot.title ? `${shot.title} 放大预览` : "镜头图放大预览";
+    if (isGroupShot) {
+      renderReferenceFrames(referenceFramesList, shot);
+      bindGroupUploadZone(groupUploadFrame, groupImagesInput, shot);
+
+      groupImagesInput.addEventListener("change", async (event) => {
+        const files = Array.from(event.target.files || []);
+        if (!files.length) {
+          return;
+        }
+
+        await addFilesToGroupShot(shot, files);
+        event.target.value = "";
+        render();
+      });
+    } else {
+      imageEmpty.innerHTML = '<span class="drag-tip">拖拽图片到这里，或点击上传</span>';
+
+      if (shot.imageDataUrl) {
+        imageFrame.classList.add("has-image");
+        image.src = shot.imageDataUrl;
+        image.alt = shot.title ? `${shot.title} 放大预览` : "镜头图放大预览";
+      }
+
+      bindImageDropZone(imageFrame, imageInput, shot);
     }
-
-    bindImageDropZone(imageFrame, imageInput, shot);
 
     currentVersionLabel.textContent = shot.updatedAt ? `最近更新：${formatTime(shot.updatedAt)}` : "尚未保存";
     historyCount.textContent = `${shot.promptHistory.length} 条归档`;
-    favoriteButton.textContent = isFavoriteShot(shot.id) ? "更新收藏" : "收藏此镜头";
+    const favorited = isFavoriteShot(shot.id);
+    favoriteButton.textContent = favorited ? "覆盖收藏" : "收藏此镜头";
+    duplicateFavoriteButton.hidden = !favorited;
 
     titleInput.addEventListener("input", async (event) => {
       shot.title = event.target.value;
@@ -347,8 +485,16 @@ function render() {
       await insertShotAt(index);
     });
 
+    fragment.querySelector(".insert-group-above-button").addEventListener("click", async () => {
+      await insertShotAt(index, "group");
+    });
+
     fragment.querySelector(".insert-below-button").addEventListener("click", async () => {
       await insertShotAt(index + 1);
+    });
+
+    fragment.querySelector(".insert-group-below-button").addEventListener("click", async () => {
+      await insertShotAt(index + 1, "group");
     });
 
     fragment.querySelector(".delete-button").addEventListener("click", async () => {
@@ -364,6 +510,10 @@ function render() {
 
     favoriteButton.addEventListener("click", async () => {
       await toggleFavoriteShot(shot);
+    });
+
+    duplicateFavoriteButton.addEventListener("click", async () => {
+      await createNewFavoriteFromShot(shot);
     });
 
     renderHistory(historyList, shot);
@@ -384,9 +534,13 @@ function renderPageChrome() {
   elements.workspaceSummary.hidden = !isWorkspace;
   elements.workspaceView.hidden = !isWorkspace;
   elements.favoritesView.hidden = isWorkspace;
+  elements.favoritesBulkBar.hidden = isWorkspace || !uiState.isFavoriteBatchMode;
   elements.favoritesSearch.value = uiState.favoriteSearchTerm;
   populateFavoriteTagFilter();
   elements.favoritesTagFilter.value = uiState.favoriteTagFilter;
+  elements.favoritesBatchToggleButton.textContent = uiState.isFavoriteBatchMode ? "退出批量处理" : "批量处理";
+  elements.favoritesBatchToggleButton.classList.toggle("favorite-accent-button", uiState.isFavoriteBatchMode);
+  updateFavoriteBulkBar();
 
   if (isWorkspace) {
     elements.heroTitleLine1.textContent = "视频提示词";
@@ -409,6 +563,8 @@ function setCurrentView(view) {
 
 function renderFavorites() {
   const favorites = getFilteredFavorites();
+  const selectedIds = new Set(uiState.selectedFavoriteIds);
+  const isBatchMode = uiState.isFavoriteBatchMode;
 
   if (!favorites.length) {
     elements.favoritesContainer.innerHTML = uiState.favoriteSearchTerm
@@ -424,6 +580,9 @@ function renderFavorites() {
     const image = fragment.querySelector(".favorite-image");
     const openButton = fragment.querySelector(".favorite-open-button");
     const title = fragment.querySelector(".favorite-title");
+    const metaList = fragment.querySelector(".favorite-meta-list");
+    const tile = fragment.querySelector(".favorite-tile");
+    const actions = fragment.querySelector(".favorite-tile-actions");
 
     if (favorite.imageDataUrl) {
       imageFrame.classList.add("has-image");
@@ -432,8 +591,21 @@ function renderFavorites() {
     image.alt = favorite.title ? `${favorite.title} 收藏预览` : "收藏镜头图预览";
     title.textContent = favorite.title || "未命名镜头";
     title.title = [favorite.title || "未命名镜头", ...(favorite.tags || [])].join(" · ");
+    if (favorite.type === "group") {
+      metaList.insertAdjacentHTML("beforeend", `<div class="favorite-frame-strip">${renderFavoriteFrameStrip(favorite.referenceFrames || [], 4)}</div>`);
+    }
+    tile.classList.toggle("is-selected", selectedIds.has(favorite.id));
+    tile.classList.toggle("is-batch-mode", isBatchMode);
+    actions.hidden = isBatchMode;
 
     openButton.addEventListener("click", () => {
+      if (isBatchMode) {
+        const nextSelected = !uiState.selectedFavoriteIds.includes(favorite.id);
+        toggleFavoriteSelection(favorite.id, nextSelected);
+        tile.classList.toggle("is-selected", nextSelected);
+        updateFavoriteBulkBar();
+        return;
+      }
       openFavoriteModal(favorite.id);
     });
 
@@ -442,12 +614,7 @@ function renderFavorites() {
     });
 
     fragment.querySelector(".unfavorite-button").addEventListener("click", async () => {
-      state.favorites = state.favorites.filter((item) => item.id !== favorite.id);
-      if (uiState.selectedFavoriteId === favorite.id) {
-        uiState.selectedFavoriteId = null;
-      }
-      await persistState("已移出收藏。");
-      render();
+      await deleteFavoritesByIds([favorite.id]);
     });
 
     elements.favoritesContainer.append(fragment);
@@ -489,26 +656,34 @@ function renderFavoriteHistory(container, entries, favoriteId = "") {
 }
 
 function renderFavoriteModal(favorite) {
+  const allFrames = favorite.referenceFrames || [];
+  const initialPreviewImage = allFrames.find((frame) => frame.imageDataUrl)?.imageDataUrl || favorite.imageDataUrl || "";
   elements.favoriteModalContent.innerHTML = `
     <article class="shot-card favorite-detail-card">
       <div class="panel-header">
         <h2>收藏详情</h2>
         <div class="history-actions">
           <button class="ghost-button favorite-detail-move" type="button">移入工作台</button>
-          <button class="ghost-button favorite-detail-remove danger" type="button">移出收藏</button>
+          <button class="ghost-button favorite-detail-remove danger" type="button">删除</button>
           <button class="ghost-button favorite-detail-close" type="button">关闭</button>
         </div>
       </div>
       <div class="favorite-detail-body">
         <section class="image-panel favorite-detail-panel">
-          <div class="image-frame favorite-detail-image ${favorite.imageDataUrl ? "has-image" : ""}">
-            <img class="shot-image" src="${escapeHtml(favorite.imageDataUrl || "")}" alt="${escapeHtml(favorite.title || "收藏镜头图")}">
+          <div class="image-frame favorite-detail-image ${initialPreviewImage ? "has-image" : ""}">
+            <img class="shot-image" src="${escapeHtml(initialPreviewImage)}" alt="${escapeHtml(favorite.title || "收藏镜头图")}">
             <div class="image-empty">未上传镜头图</div>
           </div>
           <div class="favorite-meta-list">
             <p class="favorite-title">${escapeHtml(favorite.title || "未命名镜头")}</p>
+            <p class="favorite-time meta">内容类型：${favorite.type === "group" ? "镜头组" : "单镜头"}</p>
             <p class="favorite-time meta">收藏时间：${formatTime(favorite.favoritedAt)}</p>
           </div>
+          ${favorite.type === "group" ? `
+            <div class="favorite-shot-list">
+              ${renderFavoriteShotList(allFrames, initialPreviewImage)}
+            </div>
+          ` : ""}
           <label class="field compact favorite-tags-field">
             <span>新增标签</span>
             <input class="favorite-tags-input" type="text" value="" placeholder="例如：第一场，s01，角色名，奇幻">
@@ -539,6 +714,8 @@ function renderFavoriteModal(favorite) {
 
   const historyContainer = elements.favoriteModalContent.querySelector(".favorite-history");
   const archiveToggleButton = elements.favoriteModalContent.querySelector(".favorite-archive-toggle");
+  const previewImage = elements.favoriteModalContent.querySelector(".favorite-detail-image");
+  const previewImageElement = previewImage?.querySelector(".shot-image");
 
   renderFavoriteHistory(historyContainer, favorite.promptHistory || [], favorite.id);
   const tagsInput = elements.favoriteModalContent.querySelector(".favorite-tags-input");
@@ -580,31 +757,54 @@ function renderFavoriteModal(favorite) {
   elements.favoriteModalContent.querySelector(".favorite-detail-move").addEventListener("click", async () => {
     await moveFavoriteToWorkspace(favorite);
   });
+  elements.favoriteModalContent.querySelectorAll(".favorite-shot-item").forEach((button) => {
+    button.addEventListener("click", () => {
+      const nextSrc = button.dataset.frameSrc || "";
+      elements.favoriteModalContent.querySelectorAll(".favorite-shot-item").forEach((item) => {
+        item.classList.toggle("is-active", item === button);
+      });
+
+      if (!previewImageElement) {
+        return;
+      }
+
+      if (!nextSrc) {
+        previewImage.classList.remove("has-image");
+        previewImageElement.src = "";
+        previewImageElement.alt = favorite.title ? `${favorite.title} 镜头预览` : "收藏镜头图";
+        return;
+      }
+
+      previewImage.classList.add("has-image");
+      previewImageElement.src = nextSrc;
+      previewImageElement.alt = favorite.title ? `${favorite.title} 镜头预览` : "收藏镜头图";
+    });
+  });
   elements.favoriteModalContent.querySelector(".favorite-detail-remove").addEventListener("click", async () => {
-    state.favorites = state.favorites.filter((item) => item.id !== favorite.id);
-    if (uiState.selectedFavoriteId === favorite.id) {
-      uiState.selectedFavoriteId = null;
-    }
-    await persistState("已移出收藏。");
-    closeFavoriteModal();
-    render();
+    await deleteFavoritesByIds([favorite.id]);
   });
   elements.favoriteModalContent.querySelector(".favorite-detail-close").addEventListener("click", closeFavoriteModal);
   elements.favoriteModalContent.querySelector(".favorite-detail-image").addEventListener("click", () => {
-    if (!favorite.imageDataUrl) {
+    const currentPreviewSrc = previewImageElement?.getAttribute("src") || "";
+    if (!currentPreviewSrc) {
       return;
     }
-    openLightbox(favorite.imageDataUrl, favorite.title);
+    openLightbox(currentPreviewSrc, favorite.title);
   });
 }
 
 function isFavoriteShot(shotId) {
-  return state.favorites.some((item) => item.shotId === shotId);
+  const shot = getShotById(shotId);
+  if (!shot) {
+    return false;
+  }
+
+  return state.favorites.some((item) => item.id === shot.linkedFavoriteId || item.shotId === shot.id);
 }
 
 async function toggleFavoriteShot(shot) {
   const snapshot = createFavoriteSnapshot(shot);
-  const existingIndex = state.favorites.findIndex((item) => item.shotId === shot.id);
+  const existingIndex = state.favorites.findIndex((item) => item.id === shot.linkedFavoriteId || item.shotId === shot.id);
 
   if (existingIndex >= 0) {
     state.favorites.splice(existingIndex, 1, snapshot);
@@ -614,19 +814,34 @@ async function toggleFavoriteShot(shot) {
     await persistState("已加入收藏夹。");
   }
 
+  shot.linkedFavoriteId = snapshot.id;
   render();
 }
 
-function createFavoriteSnapshot(shot) {
-  const existing = state.favorites.find((item) => item.shotId === shot.id);
+async function createNewFavoriteFromShot(shot) {
+  const snapshot = createFavoriteSnapshot(shot, { forceNew: true });
+  state.favorites.push(snapshot);
+  shot.linkedFavoriteId = snapshot.id;
+  await persistState("已新建收藏。");
+  render();
+}
+
+function createFavoriteSnapshot(shot, options = {}) {
+  const { forceNew = false } = options;
+  const existing = forceNew
+    ? null
+    : state.favorites.find((item) => item.id === shot.linkedFavoriteId || item.shotId === shot.id);
   return {
     id: existing?.id || crypto.randomUUID(),
-    shotId: shot.id,
+    shotId: existing?.shotId || shot.id,
+    type: shot.type || "single",
     title: shot.title,
     directorNotes: shot.directorNotes,
-    imageDataUrl: shot.imageDataUrl,
+    imageDataUrl: getShotCoverImage(shot),
+    referenceFrames: structuredClone(shot.referenceFrames || []),
     currentPrompt: shot.currentPrompt,
     promptHistory: structuredClone(shot.promptHistory || []),
+    chatHistory: structuredClone(shot.chatHistory || []),
     tags: structuredClone(existing?.tags || []),
     favoritedAt: new Date().toISOString(),
     updatedAt: shot.updatedAt || new Date().toISOString(),
@@ -639,12 +854,14 @@ function getFilteredFavorites() {
   return favorites.filter((favorite) => {
     const historyText = (favorite.promptHistory || []).map((entry) => `${entry.label} ${entry.prompt}`).join("\n");
     const tagsText = (favorite.tags || []).join("\n");
+    const frameText = (favorite.referenceFrames || []).map((frame) => `${frame.title || ""} ${frame.notes || ""}`).join("\n");
     const haystack = [
       favorite.title,
       favorite.directorNotes,
       favorite.currentPrompt,
       historyText,
       tagsText,
+      frameText,
     ].join("\n").toLowerCase();
     const matchTerm = !term || haystack.includes(term);
     const matchTag = !uiState.favoriteTagFilter || (favorite.tags || []).some((tag) => tag.toLowerCase() === uiState.favoriteTagFilter);
@@ -653,18 +870,160 @@ function getFilteredFavorites() {
 }
 
 async function moveFavoriteToWorkspace(favorite) {
-  const shot = createShot();
-  shot.title = favorite.title || "";
-  shot.directorNotes = favorite.directorNotes || "";
-  shot.imageDataUrl = favorite.imageDataUrl || "";
-  shot.currentPrompt = favorite.currentPrompt || "";
-  shot.promptHistory = structuredClone(favorite.promptHistory || []);
-  shot.updatedAt = new Date().toISOString();
-  state.shots.push(shot);
+  state.shots.push(createWorkspaceShotFromFavorite(favorite));
   await persistState("已移入工作台。");
   if (!elements.favoriteModal.hidden) {
     renderFavoriteModal(favorite);
   }
+  render();
+}
+
+function createWorkspaceShotFromFavorite(favorite) {
+  const shot = createShot(favorite.type || "single");
+  shot.title = favorite.title || "";
+  shot.directorNotes = favorite.directorNotes || "";
+  shot.imageDataUrl = shot.type === "group" ? "" : (favorite.imageDataUrl || "");
+  shot.linkedFavoriteId = favorite.id;
+  shot.referenceFrames = structuredClone(favorite.referenceFrames || []);
+  shot.currentPrompt = favorite.currentPrompt || "";
+  shot.promptHistory = structuredClone(favorite.promptHistory || []);
+  shot.chatHistory = structuredClone(favorite.chatHistory || []);
+  shot.updatedAt = new Date().toISOString();
+  return shot;
+}
+
+function toggleFavoriteSelection(favoriteId, selected) {
+  const selectedIds = new Set(uiState.selectedFavoriteIds);
+  if (selected) {
+    selectedIds.add(favoriteId);
+  } else {
+    selectedIds.delete(favoriteId);
+  }
+  uiState.selectedFavoriteIds = [...selectedIds];
+}
+
+function updateFavoriteBulkBar() {
+  const visibleIds = getFilteredFavorites().map((favorite) => favorite.id);
+  const selectedVisibleIds = visibleIds.filter((id) => uiState.selectedFavoriteIds.includes(id));
+  const hasSelection = uiState.selectedFavoriteIds.length > 0;
+  const isBatchMode = uiState.isFavoriteBatchMode;
+  const isAllVisibleSelected = Boolean(visibleIds.length) && selectedVisibleIds.length === visibleIds.length;
+
+  elements.favoritesSelectedCount.textContent = String(uiState.selectedFavoriteIds.length);
+  elements.favoritesSelectAllButton.textContent = isAllVisibleSelected ? "清空选择" : "全选";
+  elements.favoritesSelectAllButton.disabled = !isBatchMode || !visibleIds.length;
+  elements.favoritesBulkTagsInput.disabled = !isBatchMode || !hasSelection;
+  elements.favoritesBulkTagButton.disabled = !isBatchMode || !hasSelection;
+  elements.favoritesBulkExportButton.disabled = !isBatchMode || !hasSelection;
+  elements.favoritesBulkMoveButton.disabled = !isBatchMode || !hasSelection;
+  elements.favoritesBulkDeleteButton.disabled = !isBatchMode || !hasSelection;
+}
+
+async function addTagsToFavorites(favoriteIds, rawValue) {
+  const targetIds = [...new Set((favoriteIds || []).filter(Boolean))];
+  if (!targetIds.length) {
+    setStatus("请先选择收藏。");
+    return;
+  }
+
+  const appendedTags = parseFavoriteTags(rawValue);
+  if (!appendedTags.length) {
+    setStatus("请输入要添加的标签。");
+    return;
+  }
+
+  let changedCount = 0;
+  targetIds.forEach((favoriteId) => {
+    const target = state.favorites.find((item) => item.id === favoriteId);
+    if (!target) {
+      return;
+    }
+
+    const nextTags = [...new Set([...(target.tags || []), ...appendedTags])];
+    const currentTags = target.tags || [];
+    if (currentTags.join("|") === nextTags.join("|")) {
+      return;
+    }
+
+    target.tags = nextTags;
+    changedCount += 1;
+  });
+
+  if (!changedCount) {
+    setStatus("所选收藏的标签没有变化。");
+    return;
+  }
+
+  await persistState(`已为 ${changedCount} 个收藏更新标签。`);
+  if (!elements.favoriteModal.hidden && uiState.selectedFavoriteId) {
+    const activeFavorite = state.favorites.find((item) => item.id === uiState.selectedFavoriteId);
+    if (activeFavorite) {
+      renderFavoriteModal(activeFavorite);
+    }
+  }
+  render();
+}
+
+async function moveFavoritesToWorkspaceBatch(favoriteIds) {
+  const targets = [...new Set((favoriteIds || []).filter(Boolean))]
+    .map((favoriteId) => state.favorites.find((item) => item.id === favoriteId))
+    .filter(Boolean);
+
+  if (!targets.length) {
+    setStatus("请先选择收藏。");
+    return;
+  }
+
+  targets.forEach((favorite) => {
+    state.shots.push(createWorkspaceShotFromFavorite(favorite));
+  });
+  uiState.selectedFavoriteIds = [];
+  uiState.isFavoriteBatchMode = false;
+  await persistState(`已将 ${targets.length} 个收藏移入工作台。`);
+  setCurrentView("workspace");
+}
+
+async function deleteFavoritesByIds(favoriteIds) {
+  const targetIds = [...new Set((favoriteIds || []).filter(Boolean))];
+  if (!targetIds.length) {
+    setStatus("请先选择收藏。");
+    return;
+  }
+
+  const confirmed = window.confirm(
+    targetIds.length === 1
+      ? "确认删除这个收藏吗？删除后无法恢复。"
+      : `确认删除这 ${targetIds.length} 个收藏吗？删除后无法恢复。`,
+  );
+  if (!confirmed) {
+    return;
+  }
+
+  const idSet = new Set(targetIds);
+  const beforeCount = state.favorites.length;
+  state.favorites = state.favorites.filter((item) => !idSet.has(item.id));
+  const removedCount = beforeCount - state.favorites.length;
+
+  if (!removedCount) {
+    setStatus("未找到可删除的收藏。");
+    return;
+  }
+
+  state.shots.forEach((shot) => {
+    if (idSet.has(shot.linkedFavoriteId)) {
+      shot.linkedFavoriteId = "";
+    }
+  });
+  uiState.selectedFavoriteIds = uiState.selectedFavoriteIds.filter((id) => !idSet.has(id));
+  if (!uiState.selectedFavoriteIds.length) {
+    uiState.isFavoriteBatchMode = false;
+  }
+  if (uiState.selectedFavoriteId && idSet.has(uiState.selectedFavoriteId)) {
+    uiState.selectedFavoriteId = null;
+    closeFavoriteModal();
+  }
+
+  await persistState(removedCount === 1 ? "收藏已删除。" : `已删除 ${removedCount} 个收藏。`);
   render();
 }
 
@@ -699,6 +1058,18 @@ function closeFavoriteModal() {
 }
 
 function bindImageDropZone(imageFrame, imageInput, shot) {
+  imageFrame.querySelector(".image-delete-button")?.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    if (!shot.imageDataUrl) {
+      return;
+    }
+
+    shot.imageDataUrl = "";
+    shot.updatedAt = new Date().toISOString();
+    await persistState("图片已删除。");
+    render();
+  });
+
   imageFrame.addEventListener("click", () => {
     if (shot.imageDataUrl) {
       openLightbox(shot.imageDataUrl, shot.title);
@@ -741,6 +1112,223 @@ function bindImageDropZone(imageFrame, imageInput, shot) {
     await updateShotImage(shot, file, "拖拽图片上传成功。");
     render();
   });
+}
+
+function bindGroupUploadZone(uploadFrame, input, shot) {
+  uploadFrame.addEventListener("click", () => {
+    input.click();
+  });
+
+  uploadFrame.addEventListener("dragover", (event) => {
+    event.preventDefault();
+    uploadFrame.classList.add("drag-over");
+  });
+
+  uploadFrame.addEventListener("dragenter", (event) => {
+    event.preventDefault();
+    uploadFrame.classList.add("drag-over");
+  });
+
+  uploadFrame.addEventListener("dragleave", (event) => {
+    if (event.currentTarget.contains(event.relatedTarget)) {
+      return;
+    }
+    uploadFrame.classList.remove("drag-over");
+  });
+
+  uploadFrame.addEventListener("drop", async (event) => {
+    event.preventDefault();
+    uploadFrame.classList.remove("drag-over");
+    const files = Array.from(event.dataTransfer?.files || []);
+    if (!files.length) {
+      return;
+    }
+
+    await addFilesToGroupShot(shot, files);
+    render();
+  });
+}
+
+function renderReferenceFrames(container, shot) {
+  container.innerHTML = "";
+
+  if (!shot.referenceFrames.length) {
+    container.innerHTML = '<div class="empty-state group-empty">这个镜头组还没有镜头。直接在上方拖拽或点击上传 1 到多张图即可。</div>';
+    return;
+  }
+
+  shot.referenceFrames.forEach((frame, index) => {
+    const item = document.createElement("div");
+    item.className = "reference-frame-card";
+    item.innerHTML = `
+      <div class="reference-frame-head">
+        <span class="reference-frame-order">镜头 ${index + 1}</span>
+        <div class="reference-frame-actions">
+          <button class="ghost-button insert-reference-before" type="button">上插</button>
+          <button class="ghost-button insert-reference-after" type="button">下插</button>
+          <button class="ghost-button delete-reference danger" type="button">删除</button>
+        </div>
+      </div>
+      <div class="reference-frame-grid">
+        <div>
+          <div class="image-frame ${frame.imageDataUrl ? "has-image" : ""}">
+            <img class="shot-image" src="${escapeHtml(frame.imageDataUrl || "")}" alt="${escapeHtml(`镜头 ${index + 1}`)}">
+            <input class="reference-image-input hidden-file-input" type="file" accept="image/*">
+            <div class="image-empty">拖拽或点击上传</div>
+            <button class="image-delete-button" type="button" aria-label="删除镜头图">×</button>
+          </div>
+        </div>
+        <div>
+          <label class="field compact">
+            <span>镜头内容</span>
+            <textarea class="reference-notes-input" rows="4" placeholder="例如：镜头轻推近，人物回头，风吹动头发，夕阳逆光。">${escapeHtml(frame.notes || "")}</textarea>
+          </label>
+        </div>
+      </div>
+    `;
+
+    const frameImage = item.querySelector(".image-frame");
+    const frameImageInput = item.querySelector(".reference-image-input");
+    const notesInput = item.querySelector(".reference-notes-input");
+
+    bindReferenceFrameDropZone(frameImage, frameImageInput, shot, frame);
+
+    notesInput.addEventListener("input", (event) => {
+      frame.notes = event.target.value;
+      shot.updatedAt = new Date().toISOString();
+      queuePersistState("镜头说明已更新。");
+    });
+
+    frameImageInput.addEventListener("change", async (event) => {
+      const [file] = Array.from(event.target.files || []);
+      if (!file) {
+        return;
+      }
+
+      await updateReferenceFrameImage(shot, frame, file, "镜头图已更新。");
+      event.target.value = "";
+      render();
+    });
+
+    item.querySelector(".insert-reference-before").addEventListener("click", async () => {
+      shot.referenceFrames.splice(index, 0, createReferenceFrame());
+      shot.updatedAt = new Date().toISOString();
+      await persistState("已插入镜头。");
+      render();
+    });
+
+    item.querySelector(".insert-reference-after").addEventListener("click", async () => {
+      shot.referenceFrames.splice(index + 1, 0, createReferenceFrame());
+      shot.updatedAt = new Date().toISOString();
+      await persistState("已插入镜头。");
+      render();
+    });
+
+    item.querySelector(".delete-reference").addEventListener("click", async () => {
+      if (shot.referenceFrames.length === 1) {
+        setStatus("至少保留一个镜头，或直接删除整个镜头组。");
+        return;
+      }
+
+      shot.referenceFrames = shot.referenceFrames.filter((entry) => entry.id !== frame.id);
+      shot.updatedAt = new Date().toISOString();
+      await persistState("镜头已删除。");
+      render();
+    });
+
+    container.append(item);
+  });
+}
+
+function bindReferenceFrameDropZone(imageFrame, imageInput, shot, frame) {
+  imageFrame.querySelector(".image-delete-button")?.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    if (!frame.imageDataUrl) {
+      return;
+    }
+
+    frame.imageDataUrl = "";
+    shot.updatedAt = new Date().toISOString();
+    await persistState("镜头图已删除。");
+    render();
+  });
+
+  imageFrame.addEventListener("click", () => {
+    if (frame.imageDataUrl) {
+      openLightbox(frame.imageDataUrl, frame.title || shot.title);
+      return;
+    }
+
+    imageInput.click();
+  });
+
+  imageFrame.addEventListener("dragover", (event) => {
+    event.preventDefault();
+    imageFrame.classList.add("drag-over");
+  });
+
+  imageFrame.addEventListener("dragenter", (event) => {
+    event.preventDefault();
+    imageFrame.classList.add("drag-over");
+  });
+
+  imageFrame.addEventListener("dragleave", (event) => {
+    if (event.currentTarget.contains(event.relatedTarget)) {
+      return;
+    }
+    imageFrame.classList.remove("drag-over");
+  });
+
+  imageFrame.addEventListener("drop", async (event) => {
+    event.preventDefault();
+    imageFrame.classList.remove("drag-over");
+    const [file] = Array.from(event.dataTransfer?.files || []);
+    if (!file) {
+      return;
+    }
+
+    if (!file.type.startsWith("image/")) {
+      setStatus("请拖入图片文件。");
+      return;
+    }
+
+    await updateReferenceFrameImage(shot, frame, file, "拖拽镜头图上传成功。");
+    render();
+  });
+}
+
+async function addFilesToGroupShot(shot, files) {
+  const imageFiles = files.filter((file) => file.type.startsWith("image/"));
+  if (!imageFiles.length) {
+    setStatus("请上传图片文件。");
+    return;
+  }
+
+  setStatus(`正在导入 ${imageFiles.length} 张镜头图...`);
+  const existingFrames = Array.isArray(shot.referenceFrames) ? shot.referenceFrames : [];
+  const firstBlankIndex = existingFrames.findIndex(isReferenceFrameEmpty);
+  let writeIndex = firstBlankIndex >= 0 ? firstBlankIndex : existingFrames.length;
+
+  for (const file of imageFiles) {
+    const nextFrame = await createReferenceFrameFromFile(file);
+    if (writeIndex < existingFrames.length) {
+      const currentFrame = existingFrames[writeIndex];
+      currentFrame.imageDataUrl = nextFrame.imageDataUrl;
+      if (!currentFrame.title) {
+        currentFrame.title = nextFrame.title;
+      }
+      if (!currentFrame.notes) {
+        currentFrame.notes = nextFrame.notes;
+      }
+    } else {
+      existingFrames.push(nextFrame);
+    }
+    writeIndex += 1;
+  }
+
+  shot.referenceFrames = existingFrames;
+  shot.updatedAt = new Date().toISOString();
+  await persistState(`已为镜头组导入 ${imageFiles.length} 张镜头图。`);
 }
 
 function openLightbox(src, title) {
@@ -881,8 +1469,9 @@ async function handleGeneratePrompt(shotId, button) {
     return;
   }
 
-  if (!shot.imageDataUrl) {
-    setStatus("请先为这个镜头上传图片。");
+  const imageDataUrls = getShotReferenceImages(shot);
+  if (!imageDataUrls.length) {
+    setStatus(shot.type === "group" ? "请先为这个镜头组上传至少一张镜头图。" : "请先为这个镜头上传图片。");
     return;
   }
 
@@ -892,7 +1481,7 @@ async function handleGeneratePrompt(shotId, button) {
     setButtonLoading(button, "生成中...");
     const output = await requestPromptFromProvider({
       instruction: buildGenerationInstruction(shot),
-      imageDataUrl: shot.imageDataUrl,
+      imageDataUrls,
     });
 
     if (shot.currentPrompt.trim()) {
@@ -927,7 +1516,7 @@ async function handleBatchGenerate(button) {
   }
 
   const targets = state.shots.filter((shot) => {
-    if (!shot.imageDataUrl) {
+    if (!getShotReferenceImages(shot).length) {
       return false;
     }
 
@@ -953,7 +1542,7 @@ async function handleBatchGenerate(button) {
       try {
         const output = await requestPromptFromProvider({
           instruction: buildGenerationInstruction(shot),
-          imageDataUrl: shot.imageDataUrl,
+          imageDataUrls: getShotReferenceImages(shot),
         });
 
         if (shot.currentPrompt.trim()) {
@@ -1002,7 +1591,7 @@ async function handleRevisePrompt(shotId, feedback, feedbackInput, button) {
 
     const output = await requestPromptFromProvider({
       instruction: buildRevisionInstruction(shot, feedback),
-      imageDataUrl: shot.imageDataUrl,
+      imageDataUrls: getShotReferenceImages(shot),
     });
 
     if (shot.currentPrompt.trim()) {
@@ -1027,16 +1616,23 @@ function buildGenerationInstruction(shot) {
   const currentPrompt = shot.currentPrompt.trim();
   const direction = state.settings.globalDirection.trim();
   const directorNotes = (shot.directorNotes || "").trim();
+  const title = shot.title.trim() || "未命名镜头";
+  const groupNotes = buildReferenceFrameInstruction(shot);
 
   return [
     "你是专业的视频生成提示词导演。",
-    "请基于输入图片，输出一段高质量中文视频生成 Prompt。",
+    shot.type === "group"
+      ? "请基于输入的多张镜头图，输出一段适合全能参考/多图参考/切镜模式的高质量中文视频生成 Prompt。"
+      : "请基于输入图片，输出一段高质量中文视频生成 Prompt。",
     "要求：",
     "1. 直接输出最终 Prompt，不要解释",
-    "2. 包含运镜、主体、动作、镜头语言、氛围、材质质感",
+    "2. 包含运镜、主体、动作、镜头语言、氛围",
     "3. 风格要适合图生视频模型，文字具体、可执行、画面感强",
+    shot.type === "group" ? "4. 必须显式交代各镜头之间的切换关系、镜头推进顺序和段落节奏" : "",
+    `镜头标题：${title}`,
     directorNotes ? `导演讲戏：${directorNotes}` : "",
     direction ? `全局风格备注：${direction}` : "",
+    groupNotes,
     currentPrompt ? `用户已有草稿，请在保留有用意图的前提下重写提升：${currentPrompt}` : "用户暂未提供草稿，请直接从图片生成。",
   ].filter(Boolean).join("\n");
 }
@@ -1046,6 +1642,7 @@ function buildRevisionInstruction(shot, feedback) {
   const direction = state.settings.globalDirection.trim();
   const directorNotes = (shot.directorNotes || "").trim();
   const currentPrompt = shot.currentPrompt.trim();
+  const groupNotes = buildReferenceFrameInstruction(shot);
 
   return [
     "你是专业的视频生成提示词导演。",
@@ -1055,33 +1652,58 @@ function buildRevisionInstruction(shot, feedback) {
     "2. 必须把“当前 Prompt”视为唯一修改基线，不要回退到更早版本，也不要优先参考你之前生成过的 Prompt。",
     "3. 即使当前 Prompt 是用户手写的，也要在保留其核心意图的前提下精准修改。",
     "4. 如果输入图片存在，可继续结合图片修正画面细节。",
+    shot.type === "group" ? "5. 当前任务是镜头组，多镜头之间的切换设计不能丢失。" : "",
     `镜头标题：${title}`,
     directorNotes ? `导演讲戏：${directorNotes}` : "",
     direction ? `全局风格备注：${direction}` : "",
+    groupNotes,
     `当前 Prompt：${currentPrompt || "暂无"}`,
     `用户本次反馈：${feedback}`,
   ].filter(Boolean).join("\n");
 }
 
-async function requestPromptFromProvider({ instruction, imageDataUrl }) {
-  const provider = getCurrentProviderConfig();
-  if (provider.requestMode === "gemini") {
-    return requestPromptFromGemini({ instruction, imageDataUrl, provider });
+function buildReferenceFrameInstruction(shot) {
+  if (shot.type !== "group") {
+    return "";
   }
 
-  if (provider.requestMode === "openai") {
-    return requestPromptFromOpenAI({ instruction, imageDataUrl, provider });
+  const frameLines = (shot.referenceFrames || []).map((frame, index) => {
+    const parts = [`镜头 ${index + 1}`];
+    if (frame.notes?.trim()) {
+      parts.push(`要点：${frame.notes.trim()}`);
+    }
+    return parts.join("，");
+  });
+
+  return [
+    "这是一个镜头组任务。",
+    frameLines.length ? `镜头顺序：\n${frameLines.join("\n")}` : "",
+    "请根据镜头顺序自行补全自然、清晰的切换节奏。",
+  ].filter(Boolean).join("\n");
+}
+
+async function requestPromptFromProvider({ instruction, imageDataUrls }) {
+  const provider = getCurrentProviderConfig();
+  if (provider.requestMode === "gemini") {
+    return requestPromptFromGemini({ instruction, imageDataUrls, provider });
+  }
+
+  if (provider.requestMode === "openai" || provider.requestMode === "responses" || provider.requestMode === "chat_completions") {
+    if (!provider.baseUrl) {
+      throw new Error(`请先填写 ${provider.label} 的 Base URL。`);
+    }
+    return requestPromptFromOpenAI({ instruction, imageDataUrls, provider });
   }
 
   throw new Error(`暂不支持 ${provider.label}。`);
 }
 
-async function requestPromptFromGemini({ instruction, imageDataUrl, provider }) {
+async function requestPromptFromGemini({ instruction, imageDataUrls, provider }) {
   const model = encodeURIComponent(state.settings.model || provider.defaultModel);
   const apiKey = getCurrentApiKey();
   const parts = [];
 
-  if (imageDataUrl) {
+  (imageDataUrls || []).forEach((imageDataUrl) => {
     const { mimeType, data } = parseDataUrl(imageDataUrl);
     parts.push({
       inline_data: {
@@ -1089,7 +1711,7 @@ async function requestPromptFromGemini({ instruction, imageDataUrl, provider }) 
         data,
       },
     });
-  }
+  });
 
   parts.push({
     text: instruction,
@@ -1133,17 +1755,26 @@ async function requestPromptFromGemini({ instruction, imageDataUrl, provider }) 
   return text;
 }
 
-async function requestPromptFromOpenAI({ instruction, imageDataUrl, provider }) {
+async function requestPromptFromOpenAI({ instruction, imageDataUrls, provider }) {
   const model = state.settings.model || provider.defaultModel;
   const apiKey = getCurrentApiKey();
+
+  if (provider.requestMode === "chat_completions") {
+    return requestPromptFromOpenAIChatCompletions({ instruction, imageDataUrls, provider, model, apiKey });
+  }
+
+  return requestPromptFromOpenAIResponses({ instruction, imageDataUrls, provider, model, apiKey });
+}
+
+async function requestPromptFromOpenAIResponses({ instruction, imageDataUrls, provider, model, apiKey }) {
   const content = [];
 
-  if (imageDataUrl) {
+  (imageDataUrls || []).forEach((imageDataUrl) => {
     content.push({
       type: "input_image",
       image_url: imageDataUrl,
     });
-  }
+  });
 
   content.push({
     type: "input_text",
@@ -1183,6 +1814,58 @@ async function requestPromptFromOpenAI({ instruction, imageDataUrl, provider }) 
   }
 
   const text = extractOpenAIResponseText(payload);
+  if (!text) {
+    throw new Error("模型返回为空，未生成 Prompt。");
+  }
+
+  return text;
+}
+
+async function requestPromptFromOpenAIChatCompletions({ instruction, imageDataUrls, provider, model, apiKey }) {
+  const content = [];
+
+  (imageDataUrls || []).forEach((imageDataUrl) => {
+    content.push({
+      type: "image_url",
+      image_url: {
+        url: imageDataUrl,
+      },
+    });
+  });
+
+  content.push({
+    type: "text",
+    text: instruction,
+  });
+
+  const response = await fetch(`${provider.baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        {
+          role: "system",
+          content: SYSTEM_PROMPT,
+        },
+        {
+          role: "user",
+          content,
+        },
+      ],
+      temperature: provider.temperature ?? 0.4,
+    }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error?.message || `OpenAI 兼容请求失败（${response.status}）`);
+  }
+
+  const text = extractOpenAIChatCompletionText(payload);
   if (!text) {
     throw new Error("模型返回为空，未生成 Prompt。");
   }
@@ -1232,6 +1915,28 @@ function extractOpenAIResponseText(payload) {
   return "";
 }
 
+function extractOpenAIChatCompletionText(payload) {
+  const choices = Array.isArray(payload.choices) ? payload.choices : [];
+  for (const choice of choices) {
+    const content = choice?.message?.content;
+    if (typeof content === "string" && content.trim()) {
+      return content.trim();
+    }
+
+    if (Array.isArray(content)) {
+      const text = content
+        .map((entry) => entry?.text || "")
+        .join("\n")
+        .trim();
+      if (text) {
+        return text;
+      }
+    }
+  }
+
+  return "";
+}
+
 
 function parseDataUrl(dataUrl) {
   const match = String(dataUrl).match(/^data:(.+?);base64,(.+)$/);
@@ -1245,9 +1950,9 @@ function parseDataUrl(dataUrl) {
   };
 }
 
-async function insertShotAt(index) {
-  state.shots.splice(index, 0, createShot());
-  await persistState("已插入新镜头。");
+async function insertShotAt(index, type = "single") {
+  state.shots.splice(index, 0, createShot(type));
+  await persistState(type === "group" ? "已插入新镜头组。" : "已插入新镜头。");
   render();
 }
 
@@ -1301,13 +2006,16 @@ function pushHistoryEntry(shot, prompt, label) {
   return true;
 }
 
-function createShot() {
+function createShot(type = "single") {
   const now = new Date().toISOString();
   return {
     id: crypto.randomUUID(),
+    linkedFavoriteId: "",
+    type,
     title: "",
     directorNotes: "",
     imageDataUrl: "",
+    referenceFrames: type === "group" ? [createReferenceFrame()] : [],
     currentPrompt: "",
     promptHistory: [],
     chatHistory: [],
@@ -1317,10 +2025,26 @@ function createShot() {
 }
 
 async function createShotFromFile(file) {
-  const shot = createShot();
+  const shot = createShot("single");
   shot.title = file.name.replace(/\.[^.]+$/, "");
   shot.imageDataUrl = await optimizeImageFile(file);
   return shot;
+}
+
+function createReferenceFrame() {
+  return {
+    id: crypto.randomUUID(),
+    title: "",
+    notes: "",
+    imageDataUrl: "",
+  };
+}
+
+async function createReferenceFrameFromFile(file) {
+  const frame = createReferenceFrame();
+  frame.title = file.name.replace(/\.[^.]+$/, "");
+  frame.imageDataUrl = await optimizeImageFile(file);
+  return frame;
 }
 
 async function updateShotImage(shot, file, message) {
@@ -1330,6 +2054,17 @@ async function updateShotImage(shot, file, message) {
   }
 
   shot.imageDataUrl = await optimizeImageFile(file);
+  shot.updatedAt = new Date().toISOString();
+  await persistState(message);
+}
+
+async function updateReferenceFrameImage(shot, frame, file, message) {
+  if (!file.type.startsWith("image/")) {
+    setStatus("请选择图片文件。");
+    return;
+  }
+
+  frame.imageDataUrl = await optimizeImageFile(file);
   shot.updatedAt = new Date().toISOString();
   await persistState(message);
 }
@@ -1353,8 +2088,19 @@ function createChatEntry(role, content) {
   };
 }
 
+function isReferenceFrameEmpty(frame) {
+  return !frame?.title && !frame?.notes && !frame?.imageDataUrl;
+}
+
 function isShotEmpty(shot) {
-  return !shot.title && !shot.directorNotes && !shot.imageDataUrl && !shot.currentPrompt && !shot.promptHistory.length && !shot.chatHistory.length;
+  const hasReferenceFrames = (shot.referenceFrames || []).some((frame) => frame.title || frame.notes || frame.imageDataUrl);
+  return !shot.title
+    && !shot.directorNotes
+    && !shot.imageDataUrl
+    && !hasReferenceFrames
+    && !shot.currentPrompt
+    && !shot.promptHistory.length
+    && !shot.chatHistory.length;
 }
 
 function queuePersistState(message) {
@@ -1418,6 +2164,7 @@ function normalizeState(input) {
       provider: normalizeProvider(input?.settings?.provider, input?.settings?.model),
       model: normalizeModel(input?.settings?.provider, input?.settings?.model),
       apiKeys: normalizeApiKeys(input?.settings),
+      customProvider: normalizeCustomProvider(input?.settings?.customProvider, input?.settings?.model),
     },
     shots: shots.length ? shots.map(normalizeShot) : [createShot()],
     favorites: favorites.map(normalizeFavorite),
@@ -1440,11 +2187,27 @@ function normalizeModel(provider, model) {
   const normalizedProvider = normalizeProvider(provider, model);
   const providerConfig = PROVIDER_CONFIGS[normalizedProvider];
 
+  if (normalizedProvider === "custom") {
+    return String(model || "").trim() || "";
+  }
+
   if (model && model !== "openai") {
     return model;
   }
 
   return providerConfig.defaultModel;
+}
+
+function normalizeCustomProvider(customProvider, model) {
+  return {
+    ...defaultState.settings.customProvider,
+    ...customProvider,
+    label: String(customProvider?.label || defaultState.settings.customProvider.label).trim() || defaultState.settings.customProvider.label,
+    baseUrl: String(customProvider?.baseUrl || "").trim(),
+    model: String(customProvider?.model || model || "").trim(),
+    apiKeyLabel: String(customProvider?.apiKeyLabel || defaultState.settings.customProvider.apiKeyLabel).trim() || defaultState.settings.customProvider.apiKeyLabel,
+    requestMode: customProvider?.requestMode === "chat_completions" ? "chat_completions" : "responses",
+  };
 }
 
 function normalizeApiKeys(settings) {
@@ -1461,11 +2224,17 @@ function normalizeApiKeys(settings) {
 
 function normalizeShot(input) {
   const now = new Date().toISOString();
+  const type = input?.type === "group" ? "group" : "single";
   return {
     id: input?.id || crypto.randomUUID(),
+    linkedFavoriteId: input?.linkedFavoriteId || "",
+    type,
     title: input?.title || "",
     directorNotes: input?.directorNotes || "",
-    imageDataUrl: input?.imageDataUrl || "",
+    imageDataUrl: type === "single" ? (input?.imageDataUrl || "") : (input?.imageDataUrl || ""),
+    referenceFrames: type === "group"
+      ? normalizeReferenceFrames(input?.referenceFrames, input?.imageDataUrl)
+      : [],
     currentPrompt: input?.currentPrompt || "",
     promptHistory: Array.isArray(input?.promptHistory) ? input.promptHistory.map(normalizeHistoryEntry) : [],
     chatHistory: Array.isArray(input?.chatHistory) ? input.chatHistory : [],
@@ -1476,12 +2245,17 @@ function normalizeShot(input) {
 
 function normalizeFavorite(input) {
   const now = new Date().toISOString();
+  const type = input?.type === "group" ? "group" : "single";
   return {
     id: input?.id || crypto.randomUUID(),
     shotId: input?.shotId || "",
+    type,
     title: input?.title || "",
     directorNotes: input?.directorNotes || "",
     imageDataUrl: input?.imageDataUrl || "",
+    referenceFrames: type === "group"
+      ? normalizeReferenceFrames(input?.referenceFrames, input?.imageDataUrl)
+      : [],
     currentPrompt: input?.currentPrompt || "",
     promptHistory: Array.isArray(input?.promptHistory) ? input.promptHistory.map(normalizeHistoryEntry) : [],
     tags: normalizeFavoriteTags(input?.tags),
@@ -1497,6 +2271,29 @@ function normalizeFavoriteTags(input) {
   }
 
   return [...new Set(input.map((tag) => String(tag || "").trim()).filter(Boolean))];
+}
+
+function normalizeReferenceFrames(input, fallbackImageDataUrl = "") {
+  const frames = Array.isArray(input) ? input : [];
+  if (frames.length) {
+    return frames.map((frame) => ({
+      id: frame?.id || crypto.randomUUID(),
+      title: frame?.title || "",
+      notes: frame?.notes || "",
+      imageDataUrl: frame?.imageDataUrl || "",
+    }));
+  }
+
+  if (fallbackImageDataUrl) {
+    return [{
+      id: crypto.randomUUID(),
+      title: "",
+      notes: "",
+      imageDataUrl: fallbackImageDataUrl,
+    }];
+  }
+
+  return [createReferenceFrame()];
 }
 
 function parseFavoriteTags(input) {
@@ -1540,6 +2337,62 @@ function renderFavoriteTags(tags) {
       <button class="favorite-tag-remove" type="button" data-tag-value="${escapeHtml(tag)}" aria-label="删除标签 ${escapeHtml(tag)}">×</button>
     </span>
   `).join("");
+}
+
+function renderFavoritePreviewSummary(favorite) {
+  if (favorite.type !== "group") {
+    return '<p class="favorite-time meta">单镜头</p>';
+  }
+
+  const frames = favorite.referenceFrames || [];
+  return [
+    `<p class="favorite-time meta">${frames.length} 个镜头</p>`,
+    `<div class="favorite-frame-strip">${renderFavoriteFrameStrip(frames, 4)}</div>`,
+  ].join("");
+}
+
+function renderFavoriteFrameStrip(frames, limit = 4, interactive = false, activeSrc = "") {
+  const visibleFrames = (frames || []).filter((frame) => frame.imageDataUrl).slice(0, limit);
+  if (!visibleFrames.length) {
+    return '<span class="meta favorite-frame-empty">暂无镜头图</span>';
+  }
+
+  if (interactive) {
+    return visibleFrames.map((frame, index) => `
+      <button class="favorite-frame-thumb favorite-frame-thumb-button${frame.imageDataUrl === activeSrc ? " is-active" : ""}" type="button" data-frame-src="${escapeHtml(frame.imageDataUrl || "")}" aria-label="${escapeHtml(`查看镜头 ${index + 1}`)}">
+        <img src="${escapeHtml(frame.imageDataUrl || "")}" alt="${escapeHtml(`镜头 ${index + 1} 缩略图`)}">
+      </button>
+    `).join("");
+  }
+
+  return visibleFrames.map((frame, index) => `
+    <span class="favorite-frame-thumb">
+      <img src="${escapeHtml(frame.imageDataUrl || "")}" alt="${escapeHtml(`镜头 ${index + 1} 缩略图`)}">
+    </span>
+  `).join("");
+}
+
+function renderFavoriteShotList(frames, activeSrc = "") {
+  if (!frames.length) {
+    return '<div class="empty-state">这个镜头组还没有镜头内容。</div>';
+  }
+
+  return frames.map((frame, index) => {
+    const isActive = (frame.imageDataUrl || "") === activeSrc || (!activeSrc && !frame.imageDataUrl && index === 0);
+    return `
+      <button class="favorite-shot-item${isActive ? " is-active" : ""}" type="button" data-frame-src="${escapeHtml(frame.imageDataUrl || "")}">
+        <div class="favorite-shot-thumb ${frame.imageDataUrl ? "has-image" : ""}">
+          ${frame.imageDataUrl
+            ? `<img src="${escapeHtml(frame.imageDataUrl)}" alt="${escapeHtml(`镜头 ${index + 1} 预览`)}">`
+            : '<div class="favorite-shot-thumb-empty">未上传镜头图</div>'}
+        </div>
+        <div class="favorite-shot-copy">
+          <p class="favorite-shot-label">镜头 ${index + 1}</p>
+          <p class="favorite-shot-notes">${escapeHtml(frame.notes || "暂无镜头内容")}</p>
+        </div>
+      </button>
+    `;
+  }).join("");
 }
 
 async function removeFavoriteTag(favoriteId, tagValue) {
@@ -1616,7 +2469,20 @@ function syncSettingsInputs() {
 }
 
 function getCurrentProviderConfig() {
-  return PROVIDER_CONFIGS[state.settings.provider] || PROVIDER_CONFIGS[defaultState.settings.provider];
+  const providerId = state.settings.provider;
+  if (providerId === "custom") {
+    const customProvider = normalizeCustomProvider(state.settings.customProvider, state.settings.model);
+    return {
+      ...PROVIDER_CONFIGS.custom,
+      ...customProvider,
+      defaultModel: String(customProvider.model || state.settings.model || "").trim(),
+      modelSuggestions: [],
+      baseUrl: String(customProvider.baseUrl || "").trim(),
+      requestMode: customProvider.requestMode,
+    };
+  }
+
+  return PROVIDER_CONFIGS[providerId] || PROVIDER_CONFIGS[defaultState.settings.provider];
 }
 
 function getCurrentApiKey() {
@@ -1632,6 +2498,24 @@ function getCurrentApiKey() {
   }
 
   return "";
+}
+
+function getShotReferenceImages(shot) {
+  if (shot.type === "group") {
+    return (shot.referenceFrames || [])
+      .map((frame) => frame.imageDataUrl || "")
+      .filter(Boolean);
+  }
+
+  return shot.imageDataUrl ? [shot.imageDataUrl] : [];
+}
+
+function getShotCoverImage(shot) {
+  if (shot.type === "group") {
+    return getShotReferenceImages(shot)[0] || "";
+  }
+
+  return shot.imageDataUrl || "";
 }
 
 function getShotById(shotId) {
@@ -1678,6 +2562,26 @@ function renderSettingsModal() {
   const modelOptionsMarkup = provider.modelSuggestions
     .map((item) => `<option value="${escapeHtml(item)}">${escapeHtml(item)}</option>`)
     .join("");
+  const customProvider = normalizeCustomProvider(state.settings.customProvider, state.settings.model);
+  const customRequestMode = customProvider.requestMode === "chat_completions" ? "chat_completions" : "responses";
+  const customFieldsMarkup = provider.id === "custom" ? `
+    <label class="field compact">
+      <span>API 名称</span>
+      <input class="settings-custom-label-input" type="text" value="${escapeHtml(customProvider.label)}" placeholder="例如：OpenRouter / SiliconFlow / DeepSeek">
+    </label>
+    <label class="field compact">
+      <span>Base URL</span>
+      <input class="settings-custom-base-url-input" type="text" value="${escapeHtml(customProvider.baseUrl)}" placeholder="例如：https://openrouter.ai/api/v1">
+    </label>
+    <label class="field compact">
+      <span>请求模式</span>
+      <select class="settings-custom-request-mode">
+        <option value="responses"${customRequestMode === "responses" ? " selected" : ""}>Responses API</option>
+        <option value="chat_completions"${customRequestMode === "chat_completions" ? " selected" : ""}>Chat Completions API</option>
+      </select>
+    </label>
+    <p class="meta">适用于 OpenRouter、SiliconFlow 等兼容 OpenAI 的服务。Kimi、MiniMax 这类更建议先试 Chat Completions API。</p>
+  ` : "";
 
   elements.settingsModalContent.innerHTML = `
     <article class="shot-card settings-card">
@@ -1715,6 +2619,7 @@ function renderSettingsModal() {
           <div class="favorite-block">
             <h3>服务商与模型</h3>
             <div class="model-presets">${providerChipsMarkup}</div>
+            ${customFieldsMarkup}
             <label class="field compact">
               <span>当前用于生成和修改 Prompt 的模型名</span>
               <input class="settings-model-input" type="text" value="${escapeHtml(state.settings.model || defaultState.settings.model)}" list="settingsModelOptions" autocomplete="off">
@@ -1732,6 +2637,12 @@ function renderSettingsModal() {
   const modelInput = elements.settingsModalContent.querySelector(".settings-model-input");
   modelInput.addEventListener("input", (event) => {
     state.settings.model = event.target.value.trim() || provider.defaultModel;
+    if (provider.id === "custom") {
+      state.settings.customProvider = {
+        ...normalizeCustomProvider(state.settings.customProvider, state.settings.model),
+        model: state.settings.model,
+      };
+    }
     queuePersistState("模型设置已更新。");
   });
   elements.settingsModalContent.querySelectorAll(".model-preset-button").forEach((button) => {
@@ -1742,12 +2653,44 @@ function renderSettingsModal() {
       }
 
       state.settings.provider = nextProviderId;
-      state.settings.model = PROVIDER_CONFIGS[nextProviderId].defaultModel;
+      state.settings.model = nextProviderId === "custom"
+        ? (normalizeCustomProvider(state.settings.customProvider, state.settings.model).model || "")
+        : PROVIDER_CONFIGS[nextProviderId].defaultModel;
       uiState.isEditingApiKey = !String(state.settings.apiKeys?.[nextProviderId] || "").trim();
       queuePersistState("服务商设置已更新。");
       renderSettingsModal();
     });
   });
+
+  if (provider.id === "custom") {
+    const customLabelInput = elements.settingsModalContent.querySelector(".settings-custom-label-input");
+    const customBaseUrlInput = elements.settingsModalContent.querySelector(".settings-custom-base-url-input");
+    const customRequestModeInput = elements.settingsModalContent.querySelector(".settings-custom-request-mode");
+
+    customLabelInput?.addEventListener("input", (event) => {
+      state.settings.customProvider = {
+        ...normalizeCustomProvider(state.settings.customProvider, state.settings.model),
+        label: event.target.value,
+      };
+      queuePersistState("自定义 API 名称已更新。");
+    });
+
+    customBaseUrlInput?.addEventListener("input", (event) => {
+      state.settings.customProvider = {
+        ...normalizeCustomProvider(state.settings.customProvider, state.settings.model),
+        baseUrl: event.target.value,
+      };
+      queuePersistState("自定义 API 地址已更新。");
+    });
+
+    customRequestModeInput?.addEventListener("change", (event) => {
+      state.settings.customProvider = {
+        ...normalizeCustomProvider(state.settings.customProvider, state.settings.model),
+        requestMode: event.target.value,
+      };
+      queuePersistState("自定义 API 请求模式已更新。");
+    });
+  }
 
   if (shouldEditApiKey) {
     const apiInput = elements.settingsModalContent.querySelector(".settings-api-key-input");
@@ -1822,12 +2765,44 @@ function exportWorkspace() {
   setStatus("工作区已导出。");
 }
 
+function exportFavorites(favoriteIds) {
+  const targetIds = [...new Set((favoriteIds || []).filter(Boolean))];
+  if (!targetIds.length) {
+    setStatus("请先选择要导出的收藏。");
+    return;
+  }
+
+  const favorites = targetIds
+    .map((favoriteId) => state.favorites.find((item) => item.id === favoriteId))
+    .filter(Boolean);
+  if (!favorites.length) {
+    setStatus("未找到可导出的收藏。");
+    return;
+  }
+
+  const payload = {
+    exportedAt: new Date().toISOString(),
+    app: "shot-prompt-favorites",
+    favorites,
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `shot-prompt-favorites-${formatExportTime(new Date())}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
+  setStatus(`已导出 ${favorites.length} 个收藏。`);
+}
+
 function exportAllPrompts() {
   const content = state.shots
     .map((shot, index) => {
-      const title = shot.title.trim() || `Shot ${String(index + 1).padStart(2, "0")}`;
+      const prefix = shot.type === "group" ? "Group" : "Shot";
+      const title = shot.title.trim() || `${prefix} ${String(index + 1).padStart(2, "0")}`;
       return [
         `# ${title}`,
+        `类型：${shot.type === "group" ? "镜头组" : "单镜头"}`,
         shot.directorNotes ? `导演讲戏：${shot.directorNotes}` : "",
         "",
         shot.currentPrompt.trim() || "暂无 Prompt",
@@ -1863,6 +2838,34 @@ async function importWorkspace(file) {
   }
 
   return normalized.shots;
+}
+
+async function importFavorites(file) {
+  const text = await readTextFile(file);
+  let payload;
+
+  try {
+    payload = JSON.parse(text);
+  } catch (error) {
+    throw new Error("导入文件不是有效的 JSON。");
+  }
+
+  const importedFavorites = Array.isArray(payload?.favorites)
+    ? payload.favorites
+    : Array.isArray(payload)
+      ? payload
+      : [];
+
+  return importedFavorites.map((item) => {
+    const favorite = normalizeFavorite(item);
+    favorite.id = crypto.randomUUID();
+    favorite.shotId = "";
+    favorite.referenceFrames = (favorite.referenceFrames || []).map((frame) => ({
+      ...frame,
+      id: crypto.randomUUID(),
+    }));
+    return favorite;
+  });
 }
 
 function formatExportTime(date) {
