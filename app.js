@@ -359,6 +359,8 @@ function render() {
     const order = fragment.querySelector(".shot-order");
     const titleInput = fragment.querySelector(".shot-title");
     const directorNotesInput = fragment.querySelector(".director-notes");
+    const dialogueInput = fragment.querySelector(".shot-dialogue");
+    const dialogueField = dialogueInput.closest(".field");
     const imageInput = fragment.querySelector(".shot-image-input");
     const promptInput = fragment.querySelector(".shot-prompt");
     const feedbackInput = fragment.querySelector(".feedback-input");
@@ -381,10 +383,15 @@ function render() {
     directorNotesInput.placeholder = isGroupShot
       ? "例如：这一组镜头从人物走入空间开始，先交代环境，再切到动作细节，最后回到人物情绪，整体节奏由慢到快，镜头之间要连贯"
       : "例如：这一镜主打人物迟疑感，情绪要收着，眼神先躲再回看，节奏慢半拍";
+    dialogueInput.value = shot.dialogue || "";
+    dialogueInput.placeholder = isGroupShot
+      ? "例如：A：你终于来了。 B：我没迟到，只是你等得太久了。"
+      : "例如：你终于来了。今天这一步，我已经等很久了。";
     promptInput.value = shot.currentPrompt;
     mediaModeBadge.textContent = isGroupShot ? "镜头组 / 多图参考" : "单镜头 / 图生视频";
     singleMediaEditor.hidden = isGroupShot;
     groupMediaEditor.hidden = !isGroupShot;
+    dialogueField.hidden = isGroupShot;
 
     if (isGroupShot) {
       renderReferenceFrames(referenceFramesList, shot);
@@ -428,6 +435,12 @@ function render() {
       shot.directorNotes = event.target.value;
       shot.updatedAt = new Date().toISOString();
       queuePersistState("导演讲戏已更新。");
+    });
+
+    dialogueInput.addEventListener("input", async (event) => {
+      shot.dialogue = event.target.value;
+      shot.updatedAt = new Date().toISOString();
+      queuePersistState("镜头台词已更新。");
     });
 
     imageInput.addEventListener("change", async (event) => {
@@ -696,6 +709,14 @@ function renderFavoriteModal(favorite) {
             <p class="favorite-notes">${escapeHtml(favorite.directorNotes || "暂无导演讲戏")}</p>
           </div>
         </section>
+        ${favorite.type === "single" ? `
+          <section class="prompt-panel favorite-detail-panel">
+            <div class="favorite-block">
+              <h3>镜头台词</h3>
+              <p class="favorite-notes">${escapeHtml(favorite.dialogue || "暂无镜头台词")}</p>
+            </div>
+          </section>
+        ` : ""}
         <section class="prompt-panel favorite-detail-panel">
           <div class="favorite-block">
             <h3>当前 Prompt</h3>
@@ -837,6 +858,7 @@ function createFavoriteSnapshot(shot, options = {}) {
     type: shot.type || "single",
     title: shot.title,
     directorNotes: shot.directorNotes,
+    dialogue: shot.dialogue || "",
     imageDataUrl: getShotCoverImage(shot),
     referenceFrames: structuredClone(shot.referenceFrames || []),
     currentPrompt: shot.currentPrompt,
@@ -854,10 +876,11 @@ function getFilteredFavorites() {
   return favorites.filter((favorite) => {
     const historyText = (favorite.promptHistory || []).map((entry) => `${entry.label} ${entry.prompt}`).join("\n");
     const tagsText = (favorite.tags || []).join("\n");
-    const frameText = (favorite.referenceFrames || []).map((frame) => `${frame.title || ""} ${frame.notes || ""}`).join("\n");
+    const frameText = (favorite.referenceFrames || []).map((frame) => `${frame.title || ""} ${frame.notes || ""} ${frame.dialogue || ""}`).join("\n");
     const haystack = [
       favorite.title,
       favorite.directorNotes,
+      favorite.dialogue,
       favorite.currentPrompt,
       historyText,
       tagsText,
@@ -882,9 +905,13 @@ function createWorkspaceShotFromFavorite(favorite) {
   const shot = createShot(favorite.type || "single");
   shot.title = favorite.title || "";
   shot.directorNotes = favorite.directorNotes || "";
+  shot.dialogue = favorite.dialogue || "";
   shot.imageDataUrl = shot.type === "group" ? "" : (favorite.imageDataUrl || "");
   shot.linkedFavoriteId = favorite.id;
   shot.referenceFrames = structuredClone(favorite.referenceFrames || []);
+  if (shot.type === "group") {
+    applyLegacyGroupDialogueToFrames(shot.referenceFrames, shot.dialogue);
+  }
   shot.currentPrompt = favorite.currentPrompt || "";
   shot.promptHistory = structuredClone(favorite.promptHistory || []);
   shot.chatHistory = structuredClone(favorite.chatHistory || []);
@@ -1183,6 +1210,10 @@ function renderReferenceFrames(container, shot) {
             <span>镜头内容</span>
             <textarea class="reference-notes-input" rows="4" placeholder="例如：镜头轻推近，人物回头，风吹动头发，夕阳逆光。">${escapeHtml(frame.notes || "")}</textarea>
           </label>
+          <label class="field compact">
+            <span>镜头台词</span>
+            <textarea class="reference-dialogue-input" rows="3" placeholder="例如：你终于来了。今天这一步，我已经等很久了。">${escapeHtml(frame.dialogue || "")}</textarea>
+          </label>
         </div>
       </div>
     `;
@@ -1190,6 +1221,7 @@ function renderReferenceFrames(container, shot) {
     const frameImage = item.querySelector(".image-frame");
     const frameImageInput = item.querySelector(".reference-image-input");
     const notesInput = item.querySelector(".reference-notes-input");
+    const dialogueInput = item.querySelector(".reference-dialogue-input");
 
     bindReferenceFrameDropZone(frameImage, frameImageInput, shot, frame);
 
@@ -1197,6 +1229,12 @@ function renderReferenceFrames(container, shot) {
       frame.notes = event.target.value;
       shot.updatedAt = new Date().toISOString();
       queuePersistState("镜头说明已更新。");
+    });
+
+    dialogueInput.addEventListener("input", (event) => {
+      frame.dialogue = event.target.value;
+      shot.updatedAt = new Date().toISOString();
+      queuePersistState("镜头台词已更新。");
     });
 
     frameImageInput.addEventListener("change", async (event) => {
@@ -1616,6 +1654,7 @@ function buildGenerationInstruction(shot) {
   const currentPrompt = shot.currentPrompt.trim();
   const direction = state.settings.globalDirection.trim();
   const directorNotes = (shot.directorNotes || "").trim();
+  const dialogue = shot.type === "group" ? "" : (shot.dialogue || "").trim();
   const title = shot.title.trim() || "未命名镜头";
   const groupNotes = buildReferenceFrameInstruction(shot);
 
@@ -1628,9 +1667,11 @@ function buildGenerationInstruction(shot) {
     "1. 直接输出最终 Prompt，不要解释",
     "2. 包含运镜、主体、动作、镜头语言、氛围",
     "3. 风格要适合图生视频模型，文字具体、可执行、画面感强",
-    shot.type === "group" ? "4. 必须显式交代各镜头之间的切换关系、镜头推进顺序和段落节奏" : "",
+    dialogue ? "4. 如果用户提供了台词，必须在最终 Prompt 中保留这段台词，不要改写台词内容。" : "",
+    shot.type === "group" ? "5. 必须显式交代各镜头之间的切换关系、镜头推进顺序和段落节奏" : "",
     `镜头标题：${title}`,
     directorNotes ? `导演讲戏：${directorNotes}` : "",
+    dialogue ? `镜头台词：${dialogue}` : "",
     direction ? `全局风格备注：${direction}` : "",
     groupNotes,
     currentPrompt ? `用户已有草稿，请在保留有用意图的前提下重写提升：${currentPrompt}` : "用户暂未提供草稿，请直接从图片生成。",
@@ -1641,6 +1682,7 @@ function buildRevisionInstruction(shot, feedback) {
   const title = shot.title.trim() || "未命名镜头";
   const direction = state.settings.globalDirection.trim();
   const directorNotes = (shot.directorNotes || "").trim();
+  const dialogue = shot.type === "group" ? "" : (shot.dialogue || "").trim();
   const currentPrompt = shot.currentPrompt.trim();
   const groupNotes = buildReferenceFrameInstruction(shot);
 
@@ -1652,9 +1694,11 @@ function buildRevisionInstruction(shot, feedback) {
     "2. 必须把“当前 Prompt”视为唯一修改基线，不要回退到更早版本，也不要优先参考你之前生成过的 Prompt。",
     "3. 即使当前 Prompt 是用户手写的，也要在保留其核心意图的前提下精准修改。",
     "4. 如果输入图片存在，可继续结合图片修正画面细节。",
-    shot.type === "group" ? "5. 当前任务是镜头组，多镜头之间的切换设计不能丢失。" : "",
+    dialogue ? "5. 如果该镜头提供了台词，修改时必须保留这段台词，不要删改台词内容。" : "",
+    shot.type === "group" ? "6. 当前任务是镜头组，多镜头之间的切换设计不能丢失。" : "",
     `镜头标题：${title}`,
     directorNotes ? `导演讲戏：${directorNotes}` : "",
+    dialogue ? `镜头台词：${dialogue}` : "",
     direction ? `全局风格备注：${direction}` : "",
     groupNotes,
     `当前 Prompt：${currentPrompt || "暂无"}`,
@@ -1672,12 +1716,16 @@ function buildReferenceFrameInstruction(shot) {
     if (frame.notes?.trim()) {
       parts.push(`要点：${frame.notes.trim()}`);
     }
+    if (frame.dialogue?.trim()) {
+      parts.push(`台词：${frame.dialogue.trim()}`);
+    }
     return parts.join("，");
   });
 
   return [
     "这是一个镜头组任务。",
     frameLines.length ? `镜头顺序：\n${frameLines.join("\n")}` : "",
+    (shot.referenceFrames || []).some((frame) => frame.dialogue?.trim()) ? "如果某个镜头提供了台词，最终 Prompt 中必须保留对应镜头的台词，不要改写台词内容。" : "",
     "请根据镜头顺序自行补全自然、清晰的切换节奏。",
   ].filter(Boolean).join("\n");
 }
@@ -2014,6 +2062,7 @@ function createShot(type = "single") {
     type,
     title: "",
     directorNotes: "",
+    dialogue: "",
     imageDataUrl: "",
     referenceFrames: type === "group" ? [createReferenceFrame()] : [],
     currentPrompt: "",
@@ -2036,6 +2085,7 @@ function createReferenceFrame() {
     id: crypto.randomUUID(),
     title: "",
     notes: "",
+    dialogue: "",
     imageDataUrl: "",
   };
 }
@@ -2089,13 +2139,14 @@ function createChatEntry(role, content) {
 }
 
 function isReferenceFrameEmpty(frame) {
-  return !frame?.title && !frame?.notes && !frame?.imageDataUrl;
+  return !frame?.title && !frame?.notes && !frame?.dialogue && !frame?.imageDataUrl;
 }
 
 function isShotEmpty(shot) {
-  const hasReferenceFrames = (shot.referenceFrames || []).some((frame) => frame.title || frame.notes || frame.imageDataUrl);
+  const hasReferenceFrames = (shot.referenceFrames || []).some((frame) => frame.title || frame.notes || frame.dialogue || frame.imageDataUrl);
   return !shot.title
     && !shot.directorNotes
+    && !shot.dialogue
     && !shot.imageDataUrl
     && !hasReferenceFrames
     && !shot.currentPrompt
@@ -2225,16 +2276,19 @@ function normalizeApiKeys(settings) {
 function normalizeShot(input) {
   const now = new Date().toISOString();
   const type = input?.type === "group" ? "group" : "single";
+  const dialogue = input?.dialogue || "";
+  const referenceFrames = type === "group"
+    ? normalizeReferenceFrames(input?.referenceFrames, input?.imageDataUrl, dialogue)
+    : [];
   return {
     id: input?.id || crypto.randomUUID(),
     linkedFavoriteId: input?.linkedFavoriteId || "",
     type,
     title: input?.title || "",
     directorNotes: input?.directorNotes || "",
+    dialogue,
     imageDataUrl: type === "single" ? (input?.imageDataUrl || "") : (input?.imageDataUrl || ""),
-    referenceFrames: type === "group"
-      ? normalizeReferenceFrames(input?.referenceFrames, input?.imageDataUrl)
-      : [],
+    referenceFrames,
     currentPrompt: input?.currentPrompt || "",
     promptHistory: Array.isArray(input?.promptHistory) ? input.promptHistory.map(normalizeHistoryEntry) : [],
     chatHistory: Array.isArray(input?.chatHistory) ? input.chatHistory : [],
@@ -2246,16 +2300,19 @@ function normalizeShot(input) {
 function normalizeFavorite(input) {
   const now = new Date().toISOString();
   const type = input?.type === "group" ? "group" : "single";
+  const dialogue = input?.dialogue || "";
+  const referenceFrames = type === "group"
+    ? normalizeReferenceFrames(input?.referenceFrames, input?.imageDataUrl, dialogue)
+    : [];
   return {
     id: input?.id || crypto.randomUUID(),
     shotId: input?.shotId || "",
     type,
     title: input?.title || "",
     directorNotes: input?.directorNotes || "",
+    dialogue,
     imageDataUrl: input?.imageDataUrl || "",
-    referenceFrames: type === "group"
-      ? normalizeReferenceFrames(input?.referenceFrames, input?.imageDataUrl)
-      : [],
+    referenceFrames,
     currentPrompt: input?.currentPrompt || "",
     promptHistory: Array.isArray(input?.promptHistory) ? input.promptHistory.map(normalizeHistoryEntry) : [],
     tags: normalizeFavoriteTags(input?.tags),
@@ -2273,27 +2330,49 @@ function normalizeFavoriteTags(input) {
   return [...new Set(input.map((tag) => String(tag || "").trim()).filter(Boolean))];
 }
 
-function normalizeReferenceFrames(input, fallbackImageDataUrl = "") {
+function normalizeReferenceFrames(input, fallbackImageDataUrl = "", legacyDialogue = "") {
   const frames = Array.isArray(input) ? input : [];
   if (frames.length) {
-    return frames.map((frame) => ({
+    const normalizedFrames = frames.map((frame) => ({
       id: frame?.id || crypto.randomUUID(),
       title: frame?.title || "",
       notes: frame?.notes || "",
+      dialogue: frame?.dialogue || "",
       imageDataUrl: frame?.imageDataUrl || "",
     }));
+    applyLegacyGroupDialogueToFrames(normalizedFrames, legacyDialogue);
+    return normalizedFrames;
   }
 
   if (fallbackImageDataUrl) {
-    return [{
+    const normalizedFrames = [{
       id: crypto.randomUUID(),
       title: "",
       notes: "",
+      dialogue: "",
       imageDataUrl: fallbackImageDataUrl,
     }];
+    applyLegacyGroupDialogueToFrames(normalizedFrames, legacyDialogue);
+    return normalizedFrames;
   }
 
-  return [createReferenceFrame()];
+  const normalizedFrames = [createReferenceFrame()];
+  applyLegacyGroupDialogueToFrames(normalizedFrames, legacyDialogue);
+  return normalizedFrames;
+}
+
+function applyLegacyGroupDialogueToFrames(frames, legacyDialogue) {
+  const nextDialogue = String(legacyDialogue || "").trim();
+  if (!nextDialogue || !Array.isArray(frames) || !frames.length) {
+    return;
+  }
+
+  const hasFrameDialogue = frames.some((frame) => String(frame?.dialogue || "").trim());
+  if (hasFrameDialogue) {
+    return;
+  }
+
+  frames[0].dialogue = nextDialogue;
 }
 
 function parseFavoriteTags(input) {
@@ -2389,6 +2468,7 @@ function renderFavoriteShotList(frames, activeSrc = "") {
         <div class="favorite-shot-copy">
           <p class="favorite-shot-label">镜头 ${index + 1}</p>
           <p class="favorite-shot-notes">${escapeHtml(frame.notes || "暂无镜头内容")}</p>
+          ${frame.dialogue ? `<p class="favorite-shot-notes">台词：${escapeHtml(frame.dialogue)}</p>` : ""}
         </div>
       </button>
     `;
