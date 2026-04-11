@@ -1671,31 +1671,47 @@ async function handleGenerateVideo(shotId, button) {
   try {
     setButtonLoading(button, "提交任务中...");
     stopVideoPolling(shot.id);
-    const response = await fetch(VIDEO_BASE_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        apiKey: getCurrentVideoApiKey(),
-        provider: normalizeVideoProvider(state.settings.videoProvider),
-        ...payload,
-      }),
-    });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(result.error || `视频任务提交失败（${response.status}）`);
+
+    const apiKey = getCurrentVideoApiKey();
+    let taskId = "";
+    let taskStatus = "queued";
+    let origin = "";
+    let requestSummary = "";
+
+    if (apiKey) {
+      const result = await submitVideoTaskDirect(apiKey, payload);
+      taskId = result.taskId;
+      taskStatus = result.status;
+      origin = "volcengine-ark-direct";
+      requestSummary = summarizeVideoPayload(payload);
+    } else {
+      const response = await fetch(VIDEO_BASE_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: normalizeVideoProvider(state.settings.videoProvider),
+          ...payload,
+        }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(result.error || `视频任务提交失败（${response.status}）`);
+      }
+      taskId = String(result.taskId || "");
+      taskStatus = normalizeVideoStatus(result.status || "queued");
+      origin = result.origin || "";
+      requestSummary = result.requestSummary || summarizeVideoPayload(payload);
     }
 
     shot.videoTask = {
-      id: String(result.taskId || ""),
-      status: normalizeVideoStatus(result.status || "queued"),
+      id: taskId,
+      status: normalizeVideoStatus(taskStatus),
       videoUrl: "",
       coverImageUrl: "",
       lastFrameUrl: "",
       error: "",
-      origin: result.origin || "",
-      requestSummary: result.requestSummary || summarizeVideoPayload(payload),
+      origin,
+      requestSummary,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -1708,6 +1724,53 @@ async function handleGenerateVideo(shotId, button) {
   } finally {
     resetButtonLoading(button, originalLabel);
   }
+}
+
+async function submitVideoTaskDirect(apiKey, payload) {
+  const provider = normalizeVideoProvider(state.settings.videoProvider);
+  const baseUrl = String(provider.baseUrl || DEFAULT_VIDEO_BASE_URL).replace(/\/+$/, "");
+  const body = {
+    model: provider.model || payload.model,
+    content: payload.content,
+    ratio: payload.ratio,
+    duration: payload.duration,
+    resolution: payload.resolution,
+    seed: payload.seed,
+    generate_audio: payload.generate_audio,
+    camera_fixed: payload.camera_fixed,
+    watermark: payload.watermark,
+    return_last_frame: payload.return_last_frame,
+  };
+
+  Object.keys(body).forEach((key) => {
+    if (body[key] === undefined || body[key] === "") {
+      delete body[key];
+    }
+  });
+
+  const response = await fetch(`${baseUrl}/contents/generations/tasks`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(body),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const errorMsg = result?.error?.message || result?.message || `视频任务提交失败（${response.status}）`;
+    throw new Error(errorMsg);
+  }
+
+  const taskId = String(result?.id || result?.task_id || result?.data?.id || result?.data?.task_id || "").trim();
+  if (!taskId) {
+    throw new Error("视频任务已提交，但响应里没有返回任务 ID。");
+  }
+
+  return {
+    taskId,
+    status: result?.status || "queued",
+  };
 }
 
 async function handleRefreshVideoTask(shotId, button) {
@@ -1814,14 +1877,19 @@ async function refreshVideoTaskStatus(shotId, options = {}) {
   }
 
   try {
-    const response = await fetch(`${VIDEO_BASE_URL}/${encodeURIComponent(shot.videoTask.id)}?baseUrl=${encodeURIComponent(normalizeVideoProvider(state.settings.videoProvider).baseUrl)}`, {
-      headers: {
-        "x-video-api-key": getCurrentVideoApiKey(),
-      },
-    });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(result.error || `获取视频任务状态失败（${response.status}）`);
+    const apiKey = getCurrentVideoApiKey();
+    let result;
+
+    if (apiKey) {
+      result = await queryVideoTaskDirect(apiKey, shot.videoTask.id);
+    } else {
+      const response = await fetch(`${VIDEO_BASE_URL}/${encodeURIComponent(shot.videoTask.id)}?baseUrl=${encodeURIComponent(normalizeVideoProvider(state.settings.videoProvider).baseUrl)}`, {
+        headers: { "x-video-api-key": "" },
+      });
+      result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(result.error || `获取视频任务状态失败（${response.status}）`);
+      }
     }
 
     const nextStatus = normalizeVideoStatus(result.status || shot.videoTask.status);
@@ -1859,6 +1927,40 @@ async function refreshVideoTaskStatus(shotId, options = {}) {
       setStatus(error.message || "获取视频任务状态失败。");
     }
   }
+}
+
+async function queryVideoTaskDirect(apiKey, taskId) {
+  const provider = normalizeVideoProvider(state.settings.videoProvider);
+  const baseUrl = String(provider.baseUrl || DEFAULT_VIDEO_BASE_URL).replace(/\/+$/, "");
+  const response = await fetch(`${baseUrl}/contents/generations/tasks/${encodeURIComponent(taskId)}`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+    },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const errorMsg = payload?.error?.message || payload?.message || `获取视频任务状态失败（${response.status}）`;
+    throw new Error(errorMsg);
+  }
+
+  const content = payload?.content || payload?.data?.content || payload?.output || payload?.result || {};
+  const pickFirst = (...values) => {
+    for (const v of values) {
+      if (typeof v === "string" && v.trim()) return v.trim();
+      if (Array.isArray(v)) { const f = v.find((i) => typeof i === "string" && i.trim()); if (f) return f.trim(); }
+    }
+    return "";
+  };
+
+  return {
+    status: payload?.status || payload?.state || payload?.data?.status || "",
+    videoUrl: pickFirst(content?.video_url, content?.video_urls, payload?.video_url, payload?.video_urls, payload?.output?.video_url, payload?.result?.video_url),
+    coverImageUrl: pickFirst(content?.cover_image_url, content?.cover_url, payload?.cover_image_url),
+    lastFrameUrl: pickFirst(content?.last_frame_url, payload?.last_frame_url),
+    error: pickFirst(payload?.error?.message, payload?.message, payload?.error_message),
+    message: (payload?.status === "succeeded" || payload?.status === "done") ? "视频已生成完成。" : "视频任务状态已刷新。",
+  };
 }
 
 function startVideoPolling(shotId) {
