@@ -992,6 +992,7 @@ button:disabled {
 
 .references-editor {
   margin-top: 14px;
+  margin-bottom: 16px;
 }
 
 .references-header {
@@ -1004,6 +1005,7 @@ button:disabled {
 
 .references-header h3 {
   margin: 0;
+  white-space: nowrap;
 }
 
 .references-list {

@@ -629,7 +629,7 @@ function renderPageChrome() {
   updateFavoriteBulkBar();
 
   if (isSubjects) {
-    elements.heroTitleLine1.textContent = "视频";
+    elements.heroTitleLine1.textContent = "";
     elements.heroTitleLine2.textContent = "主体库";
     elements.heroSubtitleLine1.textContent = "上传角色、场景、道具的设定图，";
     elements.heroSubtitleLine2.textContent = "在 Prompt 中用 @ 快速调用。";
@@ -639,7 +639,7 @@ function renderPageChrome() {
   }
 
   if (isFavorites) {
-    elements.heroTitleLine1.textContent = "视频";
+    elements.heroTitleLine1.textContent = "";
     elements.heroTitleLine2.textContent = "收藏夹";
     elements.heroSubtitleLine1.textContent = "收藏你需要反复查看和复用的镜头内容，";
     elements.heroSubtitleLine2.textContent = "下次打开网页时，仍可在这里继续查看。";
@@ -939,14 +939,14 @@ function renderFavoriteModal(favorite) {
         </section>
         <section class="favorite-detail-panel">
           <div class="favorite-block">
-            <h3>全能参考 / 图生视频</h3>
+            <h3 style="white-space:nowrap">全能参考 / 图生视频</h3>
             <div class="favorite-refs-grid">${referencesHtml}</div>
           </div>
         </section>
         ${favorite.directorNotes ? `
         <section class="favorite-detail-panel">
           <div class="favorite-block">
-            <h3>导演讲戏</h3>
+            <h3>导演讲戏 / 镜头描述</h3>
             <p class="favorite-notes">${escapeHtml(favorite.directorNotes)}</p>
           </div>
         </section>` : ""}
