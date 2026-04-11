@@ -389,7 +389,7 @@ function render() {
     const promptInput = fragment.querySelector(".shot-prompt");
     const feedbackInput = fragment.querySelector(".feedback-input");
     const historyList = fragment.querySelector(".history-list");
-    const chatLog = fragment.querySelector(".chat-log");
+
     const currentVersionLabel = fragment.querySelector(".current-version-label");
     const historyCount = fragment.querySelector(".history-count");
     const videoTaskLabel = fragment.querySelector(".video-task-label");
@@ -588,13 +588,6 @@ function render() {
       await handleRevisePrompt(shot.id, feedback, feedbackInput, event.currentTarget);
     });
 
-    fragment.querySelector(".clear-chat-button").addEventListener("click", async () => {
-      shot.chatHistory = [];
-      shot.updatedAt = new Date().toISOString();
-      await persistState("本镜头对话已清空。");
-      render();
-    });
-
     fragment.querySelector(".insert-above-button").addEventListener("click", async () => {
       await insertShotAt(index);
     });
@@ -624,7 +617,6 @@ function render() {
     });
 
     renderHistory(historyList, shot);
-    renderChat(chatLog, shot);
 
     elements.shotsContainer.append(fragment);
   });
@@ -1607,8 +1599,12 @@ function renderHistory(container, shot) {
           <button class="ghost-button restore-history-button" type="button">恢复到当前</button>
         </div>
       </header>
-      <p>${escapeHtml(entry.prompt)}</p>
+      <p class="truncatable">${escapeHtml(entry.prompt)}</p>
     `;
+
+    item.querySelector("p.truncatable").addEventListener("click", () => {
+      item.classList.toggle("is-expanded");
+    });
 
     item.querySelector(".archive-rate-button").addEventListener("click", async () => {
       entry.rating = getNextArchiveRating(entry.rating || 0);
@@ -2879,9 +2875,17 @@ function renderVideoHistory(container, shot) {
         </div>
       </header>
       ${entry.requestSummary ? `<p class="video-history-meta">${escapeHtml(entry.requestSummary)}</p>` : ""}
+      ${entry.prompt ? `<p class="truncatable video-history-prompt">${escapeHtml(entry.prompt)}</p>` : ""}
       ${hasVideo ? `<video src="${escapeHtml(entry.videoUrl)}" controls playsinline></video>` : ""}
       ${hasVideo ? `<p class="video-history-meta"><a href="${escapeHtml(entry.videoUrl)}" target="_blank" rel="noopener noreferrer">打开视频链接</a></p>` : ""}
     `;
+
+    const promptEl = item.querySelector("p.truncatable");
+    if (promptEl) {
+      promptEl.addEventListener("click", () => {
+        item.classList.toggle("is-expanded");
+      });
+    }
 
     item.querySelector(".archive-rate-button").addEventListener("click", async () => {
       entry.rating = getNextArchiveRating(entry.rating || 0);
@@ -2900,7 +2904,7 @@ function renderVideoHistory(container, shot) {
   });
 }
 
-function createVideoHistoryEntry(videoTask) {
+function createVideoHistoryEntry(videoTask, prompt) {
   return {
     id: crypto.randomUUID(),
     taskId: videoTask.id || "",
@@ -2909,6 +2913,7 @@ function createVideoHistoryEntry(videoTask) {
     coverImageUrl: videoTask.coverImageUrl || "",
     lastFrameUrl: videoTask.lastFrameUrl || "",
     requestSummary: videoTask.requestSummary || "",
+    prompt: prompt || "",
     rating: 0,
     createdAt: new Date().toISOString(),
   };
@@ -2929,7 +2934,7 @@ function archiveVideoResult(shot) {
     shot.videoHistory = [];
   }
 
-  shot.videoHistory.push(createVideoHistoryEntry(task));
+  shot.videoHistory.push(createVideoHistoryEntry(task, shot.currentPrompt));
 }
 
 function isProbablyImageFile(file) {
