@@ -64,10 +64,12 @@ const defaultState = {
   },
   shots: [],
   favorites: [],
+  subjects: [],
 };
 
 const elements = {
   workspaceTab: document.querySelector("#workspaceTab"),
+  subjectsTab: document.querySelector("#subjectsTab"),
   favoritesTab: document.querySelector("#favoritesTab"),
   settingsButton: document.querySelector("#settingsButton"),
   heroTitleLine1: document.querySelector("#heroTitleLine1"),
@@ -87,6 +89,10 @@ const elements = {
   clearButton: document.querySelector("#clearButton"),
   shotsContainer: document.querySelector("#shotsContainer"),
   workspaceView: document.querySelector("#workspaceView"),
+  subjectsView: document.querySelector("#subjectsView"),
+  subjectsContainer: document.querySelector("#subjectsContainer"),
+  subjectsUploadInput: document.querySelector("#subjectsUploadInput"),
+  subjectCount: document.querySelector("#subjectCount"),
   favoritesView: document.querySelector("#favoritesView"),
   workspaceSummary: document.querySelector("#workspaceSummary"),
   favoritesContainer: document.querySelector("#favoritesContainer"),
@@ -164,6 +170,10 @@ function bindGlobalEvents() {
 
   elements.workspaceTab.addEventListener("click", () => {
     setCurrentView("workspace");
+  });
+
+  elements.subjectsTab.addEventListener("click", () => {
+    setCurrentView("subjects");
   });
 
   elements.favoritesTab.addEventListener("click", () => {
@@ -257,6 +267,8 @@ function bindGlobalEvents() {
   elements.favoritesBulkDeleteButton.addEventListener("click", async () => {
     await deleteFavoritesByIds(uiState.selectedFavoriteIds);
   });
+
+  bindSubjectsUploadZone();
 
   elements.globalDirection.addEventListener("input", async (event) => {
     state.settings.globalDirection = event.target.value;
@@ -596,14 +608,19 @@ function render() {
 }
 
 function renderPageChrome() {
-  const isWorkspace = uiState.currentView === "workspace";
+  const currentView = uiState.currentView;
+  const isWorkspace = currentView === "workspace";
+  const isSubjects = currentView === "subjects";
+  const isFavorites = currentView === "favorites";
   elements.workspaceTab.classList.toggle("is-active", isWorkspace);
-  elements.favoritesTab.classList.toggle("is-active", !isWorkspace);
+  elements.subjectsTab.classList.toggle("is-active", isSubjects);
+  elements.favoritesTab.classList.toggle("is-active", isFavorites);
   elements.workspaceControls.hidden = !isWorkspace;
   elements.workspaceSummary.hidden = !isWorkspace;
   elements.workspaceView.hidden = !isWorkspace;
-  elements.favoritesView.hidden = isWorkspace;
-  elements.favoritesBulkBar.hidden = isWorkspace || !uiState.isFavoriteBatchMode;
+  elements.subjectsView.hidden = !isSubjects;
+  elements.favoritesView.hidden = !isFavorites;
+  elements.favoritesBulkBar.hidden = !isFavorites || !uiState.isFavoriteBatchMode;
   elements.favoritesSearch.value = uiState.favoriteSearchTerm;
   populateFavoriteTagFilter();
   elements.favoritesTagFilter.value = uiState.favoriteTagFilter;
@@ -611,23 +628,140 @@ function renderPageChrome() {
   elements.favoritesBatchToggleButton.classList.toggle("favorite-accent-button", uiState.isFavoriteBatchMode);
   updateFavoriteBulkBar();
 
-  if (isWorkspace) {
-    elements.heroTitleLine1.textContent = "视频提示词";
-    elements.heroTitleLine2.textContent = "工作台";
-    elements.heroSubtitleLine1.textContent = "为镜头手写或生成视频提示词，";
-    elements.heroSubtitleLine2.textContent = "并在每个镜头旁与AI对话持续修改、迭代、归档。";
+  if (isSubjects) {
+    elements.heroTitleLine1.textContent = "视频";
+    elements.heroTitleLine2.textContent = "主体库";
+    elements.heroSubtitleLine1.textContent = "上传角色、场景、道具的设定图，";
+    elements.heroSubtitleLine2.textContent = "在 Prompt 中用 @ 快速调用。";
+    elements.subjectCount.textContent = String(state.subjects.length);
+    renderSubjects();
     return;
   }
 
-  elements.heroTitleLine1.textContent = "视频提示词";
-  elements.heroTitleLine2.textContent = "收藏夹";
-  elements.heroSubtitleLine1.textContent = "收藏你需要反复查看和复用的镜头内容，";
-  elements.heroSubtitleLine2.textContent = "下次打开网页时，仍可在这里继续查看。";
+  if (isFavorites) {
+    elements.heroTitleLine1.textContent = "视频";
+    elements.heroTitleLine2.textContent = "收藏夹";
+    elements.heroSubtitleLine1.textContent = "收藏你需要反复查看和复用的镜头内容，";
+    elements.heroSubtitleLine2.textContent = "下次打开网页时，仍可在这里继续查看。";
+    return;
+  }
+
+  elements.heroTitleLine1.textContent = "视频";
+  elements.heroTitleLine2.textContent = "工作台";
+  elements.heroSubtitleLine1.textContent = "上传参考素材，生成或手写 Prompt，";
+  elements.heroSubtitleLine2.textContent = "一键提交视频生成，迭代归档。";
 }
 
 function setCurrentView(view) {
   uiState.currentView = view;
   render();
+}
+
+function createSubject(imageDataUrl, name) {
+  return {
+    id: crypto.randomUUID(),
+    name: name || "",
+    type: "角色",
+    imageDataUrl: imageDataUrl || "",
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function bindSubjectsUploadZone() {
+  const zone = elements.subjectsView.querySelector(".subjects-upload-zone");
+  const input = elements.subjectsUploadInput;
+
+  zone.addEventListener("click", () => input.click());
+
+  zone.addEventListener("dragover", (event) => {
+    event.preventDefault();
+    zone.classList.add("drag-over");
+  });
+
+  zone.addEventListener("dragenter", (event) => {
+    event.preventDefault();
+    zone.classList.add("drag-over");
+  });
+
+  zone.addEventListener("dragleave", (event) => {
+    if (event.currentTarget.contains(event.relatedTarget)) return;
+    zone.classList.remove("drag-over");
+  });
+
+  zone.addEventListener("drop", async (event) => {
+    event.preventDefault();
+    zone.classList.remove("drag-over");
+    const files = Array.from(event.dataTransfer?.files || []).filter(isProbablyImageFile);
+    if (files.length) await addSubjectsFromFiles(files);
+  });
+
+  input.addEventListener("change", async (event) => {
+    const files = Array.from(event.target.files || []).filter(isProbablyImageFile);
+    if (files.length) await addSubjectsFromFiles(files);
+    input.value = "";
+  });
+}
+
+async function addSubjectsFromFiles(files) {
+  for (const file of files) {
+    const url = await optimizeImageFile(file);
+    const name = file.name.replace(/\.[^.]+$/, "");
+    state.subjects.push(createSubject(url, name));
+  }
+  await persistState(`已添加 ${files.length} 个主体。`);
+  render();
+}
+
+function renderSubjects() {
+  const container = elements.subjectsContainer;
+  container.innerHTML = "";
+
+  if (!state.subjects.length) {
+    container.innerHTML = '<div class="empty-state">暂无主体。上传角色、场景、道具的设定图开始使用。</div>';
+    return;
+  }
+
+  state.subjects.forEach((subject) => {
+    const card = document.createElement("div");
+    card.className = "subject-card";
+
+    const typeOptions = ["角色", "场景", "道具"].map(
+      (t) => `<option value="${t}"${subject.type === t ? " selected" : ""}>${t}</option>`
+    ).join("");
+
+    card.innerHTML = `
+      <div class="subject-image-frame">
+        <img class="subject-image" src="${escapeHtml(subject.imageDataUrl)}" alt="${escapeHtml(subject.name || "主体")}">
+      </div>
+      <div class="subject-info">
+        <input class="subject-name-input" type="text" value="${escapeHtml(subject.name)}" placeholder="输入名称，如：波风">
+        <select class="subject-type-select">${typeOptions}</select>
+      </div>
+      <button class="ghost-button subject-delete-button danger" type="button">删除</button>
+    `;
+
+    card.querySelector(".subject-image").addEventListener("click", () => {
+      if (subject.imageDataUrl) openLightbox(subject.imageDataUrl, subject.name);
+    });
+
+    card.querySelector(".subject-name-input").addEventListener("input", (event) => {
+      subject.name = event.target.value.trim();
+      queuePersistState("主体名称已更新。");
+    });
+
+    card.querySelector(".subject-type-select").addEventListener("change", (event) => {
+      subject.type = event.target.value;
+      queuePersistState("主体类型已更新。");
+    });
+
+    card.querySelector(".subject-delete-button").addEventListener("click", async () => {
+      state.subjects = state.subjects.filter((s) => s.id !== subject.id);
+      await persistState("主体已删除。");
+      render();
+    });
+
+    container.append(card);
+  });
 }
 
 function renderFavorites() {
@@ -1345,15 +1479,25 @@ function handleMentionInput(textarea, shot) {
   }
 
   const refs = shot.references || [];
-  if (!refs.length) {
+  const subjects = state.subjects || [];
+  if (!refs.length && !subjects.length) {
     closeMentionDropdown();
     return;
   }
 
-  const items = refs.map((ref) => ({
-    label: ref.title || ref.mediaType,
-    mediaType: ref.mediaType,
-  }));
+  const items = [
+    ...refs.map((ref) => ({
+      label: ref.title || ref.mediaType,
+      mediaType: ref.mediaType,
+      source: "ref",
+    })),
+    ...subjects.filter((s) => s.name).map((s) => ({
+      label: s.name,
+      mediaType: "image",
+      source: "subject",
+      subjectId: s.id,
+    })),
+  ];
 
   const queryLower = query.toLowerCase();
   const filtered = queryLower
@@ -1385,12 +1529,13 @@ function showMentionDropdown(textarea, atPos, items) {
   }
 
   const typeIcons = { image: "图", video: "视频", audio: "音频" };
-  mentionDropdown.innerHTML = items.map((item, i) =>
-    `<div class="mention-item${i === 0 ? " is-active" : ""}" data-index="${i}">
-      <span class="mention-item-type">${typeIcons[item.mediaType] || ""}</span>
+  mentionDropdown.innerHTML = items.map((item, i) => {
+    const sourceLabel = item.source === "subject" ? "主体" : (typeIcons[item.mediaType] || "");
+    return `<div class="mention-item${i === 0 ? " is-active" : ""}" data-index="${i}">
+      <span class="mention-item-type">${sourceLabel}</span>
       <span>${escapeHtml(item.label)}</span>
-    </div>`
-  ).join("");
+    </div>`;
+  }).join("");
 
   mentionDropdown.hidden = false;
   mentionContext = { textarea, startPos: atPos, items, activeIndex: 0 };
@@ -1927,6 +2072,17 @@ function buildVideoGenerationPayload(shot) {
     }
   }
 
+  const mentionedSubjects = getPromptMentionedSubjects(prompt);
+  for (const subject of mentionedSubjects) {
+    if (subject.imageDataUrl) {
+      content.push({
+        type: "image_url",
+        image_url: { url: subject.imageDataUrl },
+        role: "reference_image",
+      });
+    }
+  }
+
   return {
     model: normalizeVideoProvider(state.settings.videoProvider).model,
     content,
@@ -1939,6 +2095,21 @@ function buildVideoGenerationPayload(shot) {
     watermark: Boolean(videoConfig.watermark),
     return_last_frame: Boolean(videoConfig.returnLastFrame),
   };
+}
+
+function getPromptMentionedSubjects(prompt) {
+  const subjects = state.subjects || [];
+  if (!subjects.length || !prompt) return [];
+  const mentioned = [];
+  const seen = new Set();
+  for (const subject of subjects) {
+    if (!subject.name || !subject.imageDataUrl) continue;
+    if (prompt.includes(`@${subject.name}`) && !seen.has(subject.id)) {
+      mentioned.push(subject);
+      seen.add(subject.id);
+    }
+  }
+  return mentioned;
 }
 
 function summarizeVideoPayload(payload) {
@@ -2894,6 +3065,7 @@ function normalizeState(input) {
 
   const shots = Array.isArray(input.shots) ? input.shots : [];
   const favorites = Array.isArray(input.favorites) ? input.favorites : [];
+  const subjects = Array.isArray(input.subjects) ? input.subjects : [];
   return {
     settings: {
       ...defaultState.settings,
@@ -2907,6 +3079,7 @@ function normalizeState(input) {
     },
     shots: shots.length ? shots.map(normalizeShot) : [createShot()],
     favorites: favorites.map(normalizeFavorite),
+    subjects: subjects.map(normalizeSubject),
   };
 }
 
@@ -3030,6 +3203,16 @@ function normalizeFavorite(input) {
     videoHistory: Array.isArray(input?.videoHistory) ? input.videoHistory : [],
     favoritedAt: input?.favoritedAt || now,
     updatedAt: input?.updatedAt || now,
+  };
+}
+
+function normalizeSubject(input) {
+  return {
+    id: input?.id || crypto.randomUUID(),
+    name: String(input?.name || "").trim(),
+    type: input?.type || "角色",
+    imageDataUrl: input?.imageDataUrl || "",
+    createdAt: input?.createdAt || new Date().toISOString(),
   };
 }
 

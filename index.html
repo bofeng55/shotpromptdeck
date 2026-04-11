@@ -14,6 +14,7 @@
     <div class="app-header">
       <nav class="view-switcher" aria-label="页面切换">
         <button id="workspaceTab" class="view-tab is-active" type="button">工作台</button>
+        <button id="subjectsTab" class="view-tab" type="button">主体库</button>
         <button id="favoritesTab" class="view-tab" type="button">收藏夹</button>
       </nav>
       <button id="settingsButton" class="ghost-button settings-trigger" type="button">模型与 API 设置</button>
@@ -90,6 +91,23 @@
           <p id="statusText" class="status-text">本地自动存档已开启。</p>
         </section>
         <section id="shotsContainer" class="shots-container"></section>
+      </section>
+
+      <section id="subjectsView" hidden>
+        <section class="summary-bar">
+          <div>
+            <strong id="subjectCount">0</strong>
+            <span>个主体</span>
+          </div>
+          <p class="status-text">存放角色、场景、道具的设定图，在 Prompt 中用 @ 调用。</p>
+        </section>
+        <section class="subjects-grid">
+          <div class="subjects-upload-zone">
+            <input id="subjectsUploadInput" type="file" accept="image/*" multiple class="hidden-file-input">
+            <span class="drag-tip">拖拽或点击上传主体设定图</span>
+          </div>
+          <div id="subjectsContainer" class="subjects-list"></div>
+        </section>
       </section>
 
       <section id="favoritesView" hidden>

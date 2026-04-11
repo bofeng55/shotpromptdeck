@@ -1478,6 +1478,101 @@ button:disabled {
   margin-top: 8px;
 }
 
+.subjects-grid {
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.subjects-upload-zone {
+  position: relative;
+  border: 2px dashed var(--accent);
+  border-radius: 14px;
+  padding: 24px 16px;
+  text-align: center;
+  cursor: pointer;
+  background: rgba(184, 90, 49, 0.03);
+  margin-bottom: 20px;
+}
+
+.subjects-upload-zone:hover,
+.subjects-upload-zone.drag-over {
+  border-color: var(--accent-strong);
+  background: rgba(184, 90, 49, 0.07);
+}
+
+.subjects-upload-zone .drag-tip {
+  font-size: 0.95rem;
+  color: var(--accent);
+  font-weight: 500;
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
+.subjects-upload-zone input {
+  display: none;
+}
+
+.subjects-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 16px;
+}
+
+.subject-card {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.subject-image-frame {
+  aspect-ratio: 1;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+
+.subject-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  cursor: pointer;
+}
+
+.subject-info {
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.subject-name-input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 0.95rem;
+  background: var(--bg);
+}
+
+.subject-type-select {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 0.88rem;
+  background: var(--bg);
+  color: var(--muted);
+}
+
+.subject-delete-button {
+  margin: 0 12px 10px;
+  padding: 6px;
+  font-size: 0.85rem;
+}
+
 .mention-dropdown {
   z-index: 1000;
   background: var(--surface);
