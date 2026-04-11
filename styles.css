@@ -1069,27 +1069,9 @@ button:disabled {
   border: 1px solid var(--line);
 }
 
-.reference-audio-preview.is-playing {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-}
-
 .reference-audio-icon {
   font-size: 1.2rem;
   color: var(--muted);
-}
-
-.reference-audio-preview.is-playing .reference-audio-icon {
-  color: var(--accent);
-}
-
-.reference-audio-player {
-  width: 100%;
-  margin-top: 4px;
-}
-
-.reference-audio-player:not([controls]) {
-  display: none;
 }
 
 .reference-item-content {
@@ -1777,6 +1759,20 @@ button:disabled {
   max-height: calc(90vh - 32px);
   object-fit: contain;
   border-radius: 14px;
+}
+
+.lightbox-video {
+  display: block;
+  width: 100%;
+  max-height: calc(90vh - 32px);
+  border-radius: 14px;
+  background: #000;
+}
+
+.lightbox-audio {
+  display: block;
+  width: 100%;
+  margin: 40px 0;
 }
 
 .lightbox-close {

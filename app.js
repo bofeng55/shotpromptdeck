@@ -122,6 +122,8 @@ const elements = {
   statusText: document.querySelector("#statusText"),
   lightbox: document.querySelector("#lightbox"),
   lightboxImage: document.querySelector("#lightboxImage"),
+  lightboxVideo: document.querySelector("#lightboxVideo"),
+  lightboxAudio: document.querySelector("#lightboxAudio"),
   lightboxClose: document.querySelector("#lightboxClose"),
   lightboxBackdrop: document.querySelector(".lightbox-backdrop"),
   detailModalBackdrop: document.querySelector(".detail-modal-backdrop"),
@@ -1321,7 +1323,7 @@ function renderReferences(container, shot) {
     } else if (ref.mediaType === "video" && ref.url) {
       previewHtml = `<video class="reference-item-preview reference-video-preview" src="${escapeHtml(ref.url)}" preload="metadata"></video>`;
     } else if (ref.mediaType === "audio" && ref.url) {
-      previewHtml = `<div class="reference-audio-preview"><span class="reference-audio-icon">♪</span><audio class="reference-audio-player" src="${escapeHtml(ref.url)}" preload="metadata"></audio></div>`;
+      previewHtml = `<div class="reference-audio-preview"><span class="reference-audio-icon">♪</span></div>`;
     }
 
     const roleSelectHtml = ref.mediaType === "image" ? `
@@ -1377,36 +1379,17 @@ function renderReferences(container, shot) {
       if (videoPreview) {
         videoPreview.style.cursor = "pointer";
         videoPreview.addEventListener("click", () => {
-          if (videoPreview.paused) {
-            videoPreview.controls = true;
-            videoPreview.play();
-          } else {
-            videoPreview.pause();
-            videoPreview.controls = false;
-          }
+          openLightbox(ref.url, ref.title || shot.title, "video");
         });
       }
     }
 
     if (ref.mediaType === "audio" && ref.url) {
       const audioContainer = item.querySelector(".reference-audio-preview");
-      const audioPlayer = item.querySelector(".reference-audio-player");
-      if (audioContainer && audioPlayer) {
+      if (audioContainer) {
         audioContainer.style.cursor = "pointer";
         audioContainer.addEventListener("click", () => {
-          if (audioPlayer.paused) {
-            audioPlayer.controls = true;
-            audioContainer.classList.add("is-playing");
-            audioPlayer.play();
-          } else {
-            audioPlayer.pause();
-            audioPlayer.controls = false;
-            audioContainer.classList.remove("is-playing");
-          }
-        });
-        audioPlayer.addEventListener("ended", () => {
-          audioPlayer.controls = false;
-          audioContainer.classList.remove("is-playing");
+          openLightbox(ref.url, ref.title || shot.title, "audio");
         });
       }
     }
@@ -1732,9 +1715,26 @@ function closeMentionDropdown() {
   mentionContext = null;
 }
 
-function openLightbox(src, title) {
-  elements.lightboxImage.src = src;
-  elements.lightboxImage.alt = title ? `${title} 放大图` : "镜头图放大图";
+function openLightbox(src, title, mediaType) {
+  elements.lightboxImage.hidden = true;
+  elements.lightboxVideo.hidden = true;
+  elements.lightboxAudio.hidden = true;
+  elements.lightboxImage.src = "";
+  elements.lightboxVideo.src = "";
+  elements.lightboxAudio.src = "";
+
+  if (mediaType === "video") {
+    elements.lightboxVideo.src = src;
+    elements.lightboxVideo.hidden = false;
+  } else if (mediaType === "audio") {
+    elements.lightboxAudio.src = src;
+    elements.lightboxAudio.hidden = false;
+  } else {
+    elements.lightboxImage.src = src;
+    elements.lightboxImage.alt = title ? `${title} 放大图` : "放大预览";
+    elements.lightboxImage.hidden = false;
+  }
+
   elements.lightbox.hidden = false;
   document.body.classList.add("lightbox-open");
 }
@@ -1742,6 +1742,10 @@ function openLightbox(src, title) {
 function closeLightbox() {
   elements.lightbox.hidden = true;
   elements.lightboxImage.src = "";
+  elements.lightboxVideo.pause();
+  elements.lightboxVideo.src = "";
+  elements.lightboxAudio.pause();
+  elements.lightboxAudio.src = "";
   document.body.classList.remove("lightbox-open");
 }
 
