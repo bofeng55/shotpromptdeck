@@ -125,6 +125,12 @@ let state = structuredClone(defaultState);
 let dbPromise;
 let persistTimer = null;
 const videoPollTimers = new Map();
+const mentionDropdown = document.createElement("div");
+mentionDropdown.className = "mention-dropdown";
+mentionDropdown.hidden = true;
+document.body.appendChild(mentionDropdown);
+let mentionContext = null;
+let mentionJustSelected = false;
 const uiState = {
   draggingShotId: null,
   currentView: "workspace",
@@ -354,6 +360,8 @@ function bindGlobalEvents() {
     }
   });
 
+  window.addEventListener("scroll", closeMentionDropdown, true);
+
   window.addEventListener("pagehide", () => {
     stopAllVideoPolling();
     flushPendingPersist();
@@ -361,6 +369,7 @@ function bindGlobalEvents() {
 }
 
 function render() {
+  closeMentionDropdown();
   renderPageChrome();
   syncSettingsInputs();
   renderSettingsModal();
@@ -486,6 +495,9 @@ function render() {
       shot.updatedAt = new Date().toISOString();
       queuePersistState("当前 Prompt 已更新。");
     });
+
+    bindMentionAutocomplete(directorNotesInput, shot);
+    bindMentionAutocomplete(promptInput, shot);
 
     videoRatioInput.addEventListener("change", (event) => {
       shot.videoConfig.ratio = event.target.value || "16:9";
@@ -1346,7 +1358,7 @@ async function addReferencesFromFiles(shot, files) {
     }
 
     let url = "";
-    const title = file.name.replace(/\.[^.]+$/, "");
+    const title = getNextReferenceName(mediaType, refs);
     if (mediaType === "image") {
       url = await optimizeImageFile(file);
     } else {
@@ -1370,6 +1382,196 @@ function readFileAsDataUrl(file) {
     reader.onerror = () => reject(new Error("读取文件失败。"));
     reader.readAsDataURL(file);
   });
+}
+
+function getNextReferenceName(mediaType, existingRefs) {
+  const typeLabels = { image: "图片", video: "视频", audio: "音频" };
+  const label = typeLabels[mediaType] || "参考";
+  const pattern = new RegExp(`^${label}(\\d+)$`);
+  let maxNum = 0;
+  for (const ref of existingRefs) {
+    const match = (ref.title || "").match(pattern);
+    if (match) {
+      maxNum = Math.max(maxNum, parseInt(match[1], 10));
+    }
+  }
+  return `${label}${maxNum + 1}`;
+}
+
+function bindMentionAutocomplete(textarea, shot) {
+  textarea.addEventListener("input", () => {
+    if (mentionJustSelected) {
+      mentionJustSelected = false;
+      return;
+    }
+    handleMentionInput(textarea, shot);
+  });
+
+  textarea.addEventListener("keydown", (e) => {
+    if (mentionContext && mentionContext.textarea === textarea) {
+      handleMentionKeydown(e);
+    }
+  });
+
+  textarea.addEventListener("blur", () => {
+    setTimeout(() => {
+      if (mentionContext && mentionContext.textarea === textarea) {
+        closeMentionDropdown();
+      }
+    }, 200);
+  });
+}
+
+function handleMentionInput(textarea, shot) {
+  const value = textarea.value;
+  const cursorPos = textarea.selectionStart;
+  const textBeforeCursor = value.substring(0, cursorPos);
+
+  const atIndex = textBeforeCursor.lastIndexOf("@");
+  if (atIndex < 0) {
+    closeMentionDropdown();
+    return;
+  }
+
+  if (atIndex > 0 && !/[\s\n,，。.;；!！?？、（(：:]/.test(textBeforeCursor[atIndex - 1])) {
+    closeMentionDropdown();
+    return;
+  }
+
+  const query = textBeforeCursor.substring(atIndex + 1);
+  if (query.includes("\n") || query.length > 20) {
+    closeMentionDropdown();
+    return;
+  }
+
+  const refs = shot.references || [];
+  if (!refs.length) {
+    closeMentionDropdown();
+    return;
+  }
+
+  const items = refs.map((ref) => ({
+    label: ref.title || ref.mediaType,
+    mediaType: ref.mediaType,
+  }));
+
+  const queryLower = query.toLowerCase();
+  const filtered = queryLower
+    ? items.filter((item) => item.label.toLowerCase().includes(queryLower))
+    : items;
+
+  if (!filtered.length) {
+    closeMentionDropdown();
+    return;
+  }
+
+  showMentionDropdown(textarea, atIndex, filtered);
+}
+
+function showMentionDropdown(textarea, atPos, items) {
+  const rect = textarea.getBoundingClientRect();
+  const spaceBelow = window.innerHeight - rect.bottom;
+
+  mentionDropdown.style.position = "fixed";
+  mentionDropdown.style.left = `${rect.left}px`;
+  mentionDropdown.style.width = `${Math.min(rect.width, 260)}px`;
+
+  if (spaceBelow < 220) {
+    mentionDropdown.style.top = "auto";
+    mentionDropdown.style.bottom = `${window.innerHeight - rect.top + 4}px`;
+  } else {
+    mentionDropdown.style.top = `${rect.bottom + 4}px`;
+    mentionDropdown.style.bottom = "auto";
+  }
+
+  const typeIcons = { image: "图", video: "视频", audio: "音频" };
+  mentionDropdown.innerHTML = items.map((item, i) =>
+    `<div class="mention-item${i === 0 ? " is-active" : ""}" data-index="${i}">
+      <span class="mention-item-type">${typeIcons[item.mediaType] || ""}</span>
+      <span>${escapeHtml(item.label)}</span>
+    </div>`
+  ).join("");
+
+  mentionDropdown.hidden = false;
+  mentionContext = { textarea, startPos: atPos, items, activeIndex: 0 };
+
+  mentionDropdown.querySelectorAll(".mention-item").forEach((el, i) => {
+    el.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      selectMentionItem(i);
+    });
+  });
+}
+
+function handleMentionKeydown(e) {
+  if (!mentionContext) {
+    return;
+  }
+
+  const { items, activeIndex } = mentionContext;
+
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    mentionContext.activeIndex = (activeIndex + 1) % items.length;
+    updateMentionActiveItem();
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    mentionContext.activeIndex = (activeIndex - 1 + items.length) % items.length;
+    updateMentionActiveItem();
+  } else if (e.key === "Enter" || e.key === "Tab") {
+    e.preventDefault();
+    selectMentionItem(mentionContext.activeIndex);
+  } else if (e.key === "Escape") {
+    e.preventDefault();
+    closeMentionDropdown();
+  }
+}
+
+function updateMentionActiveItem() {
+  if (!mentionContext) {
+    return;
+  }
+
+  mentionDropdown.querySelectorAll(".mention-item").forEach((el, i) => {
+    el.classList.toggle("is-active", i === mentionContext.activeIndex);
+  });
+
+  const activeEl = mentionDropdown.querySelector(".mention-item.is-active");
+  if (activeEl) {
+    activeEl.scrollIntoView({ block: "nearest" });
+  }
+}
+
+function selectMentionItem(index) {
+  if (!mentionContext) {
+    return;
+  }
+
+  const { textarea, startPos, items } = mentionContext;
+  const item = items[index];
+  if (!item) {
+    return;
+  }
+
+  const before = textarea.value.substring(0, startPos);
+  const after = textarea.value.substring(textarea.selectionStart);
+  const mention = `@${item.label}`;
+
+  closeMentionDropdown();
+  mentionJustSelected = true;
+
+  textarea.value = before + mention + after;
+  const newPos = startPos + mention.length;
+  textarea.selectionStart = newPos;
+  textarea.selectionEnd = newPos;
+  textarea.dispatchEvent(new Event("input", { bubbles: true }));
+  textarea.focus();
+}
+
+function closeMentionDropdown() {
+  mentionDropdown.hidden = true;
+  mentionDropdown.innerHTML = "";
+  mentionContext = null;
 }
 
 function openLightbox(src, title) {
