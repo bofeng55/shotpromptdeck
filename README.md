@@ -1,12 +1,13 @@
 # 视频提示词工作台
 
-一个用于整理镜头图、生成视频 Prompt、持续修改、收藏归档的纯前端工具。
+一个用于整理镜头图、生成视频 Prompt、持续修改、收藏归档，并可直接提交 Seedance 视频生成任务的网页工具。
 
 现在同时支持：
 - 单镜头 / 图生视频
 - 镜头组 / 多图参考
 - 收藏夹批量处理
 - 多服务商与自定义 API 接入
+- Seedance 视频异步任务创建与查询
 
 ## 主要功能
 
@@ -14,6 +15,8 @@
 - 为单镜头生成、修改、归档 Prompt
 - 为镜头组基于多张图和镜头顺序生成 Prompt
 - 为每个镜头组子镜头填写 `镜头内容`
+- 直接从当前 `Prompt` 提交 Seedance 视频生成任务
+- 自动轮询任务状态，并在镜头卡片内预览视频结果
 - 在工作台中收藏镜头，并支持 `覆盖收藏` / `新建收藏`
 - 在收藏夹里检索、筛选、打标签、移入工作台
 - 收藏夹支持批量选择、批量打标签、批量移入工作台、批量删除
@@ -81,6 +84,7 @@ Kimi、MiniMax 这类服务更建议先试 `Chat Completions API`。
 - 标签
 - 模型设置
 - API Key
+- Seedance 视频模型 / Base URL / Video API Key
 - 自定义 API 配置
 
 这些数据默认只存在当前浏览器环境里。
@@ -89,16 +93,41 @@ Kimi、MiniMax 这类服务更建议先试 `Chat Completions API`。
 
 - API Key 不会写入项目源码文件
 - API Key 主要保存在当前浏览器本地数据库中
-- 这个版本是前端直连模型服务商接口
+- Prompt 生成部分仍然是前端直连模型服务商接口
+- Seedance 视频生成部分通过项目内的服务端接口代理：
+  - `POST /api/video-tasks`
+  - `GET /api/video-tasks/:taskId`
 
 因此需要注意：
 
 - 每个使用者都需要填写自己的 API Key
-- 浏览器运行时会直接使用这个 key 请求模型服务商
+- Prompt 模型 key 会由浏览器直接请求对应模型服务商
+- Seedance key 推荐配置在部署环境变量 `ARK_API_KEY`
+- 如果没有配置环境变量，也可以在页面设置里本地保存 `Seedance API Key`，由本项目服务端转发
+
+## Seedance 视频生成说明
+
+- 默认视频服务地址是 `https://ark.cn-beijing.volces.com/api/v3`
+- 默认模型 ID 是 `doubao-seedance-1-0-pro-250528`
+- 视频任务会直接读取镜头卡片里的 `当前 Prompt`
+- 单镜头会带当前图片作为 `首帧`
+- 镜头组默认走 `多参考图` 模式，当前会取前 4 张有图子镜头作为参考图提交
+- 如果你更想明确控制起止画面，也可以在镜头卡片里切换成 `首尾帧` 模式
+- 当前实现遵循火山方舟 Seedance 官方文档的异步任务流程：先创建任务，再轮询任务状态获取最终视频链接
+
+## 部署建议
+
+部署到 Vercel 时，建议至少配置：
+
+- `ARK_API_KEY`
+
+这样网页前端就不需要额外传视频 key；如果你只是本地试用，也可以在右上角设置里直接填写 `Seedance API Key`。
 
 ## 项目文件
 
 - `index.html`
 - `app.js`
 - `styles.css`
+- `api/video-tasks.js`
+- `api/video-tasks/[taskId].js`
 - `README.md`

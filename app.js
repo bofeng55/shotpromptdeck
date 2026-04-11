@@ -5,6 +5,10 @@ const PERSIST_DEBOUNCE_MS = 300;
 const IMAGE_MAX_DIMENSION = 1280;
 const IMAGE_OUTPUT_MIME = "image/jpeg";
 const IMAGE_OUTPUT_QUALITY = 0.76;
+const VIDEO_POLL_INTERVAL_MS = 10000;
+const VIDEO_BASE_URL = "/api/video-tasks";
+const DEFAULT_VIDEO_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
+const DEFAULT_VIDEO_MODEL = "doubao-seedance-1-0-pro-250528";
 const SYSTEM_PROMPT = "你是专业的视频生成提示词导演，只输出最终可直接使用的中文视频生成 Prompt，不要解释。";
 const PROVIDER_CONFIGS = {
   gemini: {
@@ -45,6 +49,11 @@ const defaultState = {
     apiKeys: {},
     model: PROVIDER_CONFIGS.gemini.defaultModel,
     globalDirection: "",
+    videoApiKey: "",
+    videoProvider: {
+      baseUrl: DEFAULT_VIDEO_BASE_URL,
+      model: DEFAULT_VIDEO_MODEL,
+    },
     customProvider: {
       label: "自定义 API",
       baseUrl: "",
@@ -68,6 +77,7 @@ const elements = {
   heroSubtitleLine2: document.querySelector("#heroSubtitleLine2"),
   workspaceControls: document.querySelector("#workspaceControls"),
   globalDirection: document.querySelector("#globalDirection"),
+  imageUploadTrigger: document.querySelector("#imageUploadTrigger"),
   imageUpload: document.querySelector("#imageUpload"),
   batchMode: document.querySelector("#batchMode"),
   batchGenerateButton: document.querySelector("#batchGenerateButton"),
@@ -114,6 +124,7 @@ const elements = {
 let state = structuredClone(defaultState);
 let dbPromise;
 let persistTimer = null;
+const videoPollTimers = new Map();
 const uiState = {
   draggingShotId: null,
   currentView: "workspace",
@@ -123,6 +134,7 @@ const uiState = {
   favoriteTagFilter: "",
   isFavoriteBatchMode: false,
   isEditingApiKey: false,
+  isEditingVideoApiKey: false,
 };
 
 bootstrap();
@@ -138,9 +150,12 @@ async function bootstrap() {
   }
 
   render();
+  resumePendingVideoTasks();
 }
 
 function bindGlobalEvents() {
+  bindRuntimeErrorReporting();
+
   elements.workspaceTab.addEventListener("click", () => {
     setCurrentView("workspace");
   });
@@ -248,22 +263,27 @@ function bindGlobalEvents() {
       return;
     }
 
-    setStatus(`正在导入 ${files.length} 张镜头图...`);
-    const importedShots = [];
-    for (const file of files) {
-      importedShots.push(await createShotFromFile(file));
-    }
+    try {
+      setStatus(`正在导入 ${files.length} 张镜头图...`);
+      const importedShots = [];
+      for (const file of files) {
+        importedShots.push(await createShotFromFile(file));
+      }
 
-    const hadOnlyBlankShot = state.shots.length === 1 && isShotEmpty(state.shots[0]);
-    if (hadOnlyBlankShot) {
-      state.shots = importedShots;
-    } else {
-      state.shots.push(...importedShots);
-    }
+      const hadOnlyBlankShot = state.shots.length === 1 && isShotEmpty(state.shots[0]);
+      if (hadOnlyBlankShot) {
+        state.shots = importedShots;
+      } else {
+        state.shots.push(...importedShots);
+      }
 
-    await persistState(`已导入 ${files.length} 个镜头。`);
-    event.target.value = "";
-    render();
+      await persistState(`已导入 ${files.length} 个镜头。`);
+      render();
+    } catch (error) {
+      reportRuntimeError(error, "批量导入镜头图失败。");
+    } finally {
+      event.target.value = "";
+    }
   });
 
   elements.batchGenerateButton.addEventListener("click", async (event) => {
@@ -294,6 +314,7 @@ function bindGlobalEvents() {
 
       const importedShots = await importWorkspace(file);
       closeLightbox();
+      stopAllVideoPolling();
       state.shots = importedShots;
       await persistState("工作台镜头已导入。");
       render();
@@ -311,6 +332,7 @@ function bindGlobalEvents() {
     }
 
     closeLightbox();
+    stopAllVideoPolling();
     state.shots = [createShot()];
     await persistState("已清空工作台记录。");
     render();
@@ -333,6 +355,7 @@ function bindGlobalEvents() {
   });
 
   window.addEventListener("pagehide", () => {
+    stopAllVideoPolling();
     flushPendingPersist();
   });
 }
@@ -368,6 +391,19 @@ function render() {
     const chatLog = fragment.querySelector(".chat-log");
     const currentVersionLabel = fragment.querySelector(".current-version-label");
     const historyCount = fragment.querySelector(".history-count");
+    const videoTaskLabel = fragment.querySelector(".video-task-label");
+    const videoGroupModeField = fragment.querySelector(".video-group-mode-field");
+    const videoGroupModeInput = fragment.querySelector(".video-group-mode");
+    const videoRatioInput = fragment.querySelector(".video-ratio");
+    const videoDurationInput = fragment.querySelector(".video-duration");
+    const videoResolutionInput = fragment.querySelector(".video-resolution");
+    const videoSeedInput = fragment.querySelector(".video-seed");
+    const videoWatermarkInput = fragment.querySelector(".video-watermark");
+    const videoReturnLastFrameInput = fragment.querySelector(".video-return-last-frame");
+    const generatedVideo = fragment.querySelector(".generated-video");
+    const videoLastFrame = fragment.querySelector(".video-last-frame");
+    const videoResultEmpty = fragment.querySelector(".video-result-empty");
+    const videoResultMeta = fragment.querySelector(".video-result-meta");
     const favoriteButton = fragment.querySelector(".favorite-button");
     const duplicateFavoriteButton = fragment.querySelector(".duplicate-favorite-button");
 
@@ -388,10 +424,26 @@ function render() {
       ? "例如：A：你终于来了。 B：我没迟到，只是你等得太久了。"
       : "例如：你终于来了。今天这一步，我已经等很久了。";
     promptInput.value = shot.currentPrompt;
+    videoGroupModeField.hidden = !isGroupShot;
+    videoGroupModeInput.value = shot.videoConfig.groupInputMode || "reference";
+    videoRatioInput.value = shot.videoConfig.ratio;
+    videoDurationInput.value = String(shot.videoConfig.duration);
+    videoResolutionInput.value = shot.videoConfig.resolution;
+    videoSeedInput.value = shot.videoConfig.seed ?? "";
+    videoWatermarkInput.checked = Boolean(shot.videoConfig.watermark);
+    videoReturnLastFrameInput.checked = Boolean(shot.videoConfig.returnLastFrame);
     mediaModeBadge.textContent = isGroupShot ? "镜头组 / 多图参考" : "单镜头 / 图生视频";
     singleMediaEditor.hidden = isGroupShot;
     groupMediaEditor.hidden = !isGroupShot;
     dialogueField.hidden = isGroupShot;
+    renderVideoResult({
+      shot,
+      videoTaskLabel,
+      generatedVideo,
+      videoLastFrame,
+      videoResultEmpty,
+      videoResultMeta,
+    });
 
     if (isGroupShot) {
       renderReferenceFrames(referenceFramesList, shot);
@@ -403,9 +455,14 @@ function render() {
           return;
         }
 
-        await addFilesToGroupShot(shot, files);
-        event.target.value = "";
-        render();
+        try {
+          await addFilesToGroupShot(shot, files);
+          render();
+        } catch (error) {
+          reportRuntimeError(error, "镜头组图片上传失败。");
+        } finally {
+          event.target.value = "";
+        }
       });
     } else {
       imageEmpty.innerHTML = '<span class="drag-tip">拖拽图片到这里，或点击上传</span>';
@@ -449,9 +506,14 @@ function render() {
         return;
       }
 
-      await updateShotImage(shot, file, "镜头图片已更新。");
-      imageInput.value = "";
-      render();
+      try {
+        await updateShotImage(shot, file, "镜头图片已更新。");
+        render();
+      } catch (error) {
+        reportRuntimeError(error, "镜头图片上传失败。");
+      } finally {
+        imageInput.value = "";
+      }
     });
 
     promptInput.addEventListener("input", async (event) => {
@@ -460,8 +522,64 @@ function render() {
       queuePersistState("当前 Prompt 已更新。");
     });
 
+    videoRatioInput.addEventListener("change", (event) => {
+      shot.videoConfig.ratio = event.target.value || "16:9";
+      shot.updatedAt = new Date().toISOString();
+      queuePersistState("视频比例已更新。");
+    });
+
+    videoGroupModeInput.addEventListener("change", (event) => {
+      shot.videoConfig.groupInputMode = event.target.value === "first_last" ? "first_last" : "reference";
+      shot.updatedAt = new Date().toISOString();
+      queuePersistState("镜头组视频输入模式已更新。");
+    });
+
+    videoDurationInput.addEventListener("change", (event) => {
+      shot.videoConfig.duration = clampVideoDuration(event.target.value);
+      shot.updatedAt = new Date().toISOString();
+      queuePersistState("视频时长已更新。");
+    });
+
+    videoResolutionInput.addEventListener("change", (event) => {
+      shot.videoConfig.resolution = String(event.target.value || "").trim();
+      shot.updatedAt = new Date().toISOString();
+      queuePersistState("视频分辨率已更新。");
+    });
+
+    videoSeedInput.addEventListener("input", (event) => {
+      shot.videoConfig.seed = normalizeVideoSeed(event.target.value);
+      shot.updatedAt = new Date().toISOString();
+      queuePersistState("视频随机种子已更新。");
+    });
+
+    videoWatermarkInput.addEventListener("change", (event) => {
+      shot.videoConfig.watermark = Boolean(event.target.checked);
+      shot.updatedAt = new Date().toISOString();
+      queuePersistState("视频水印设置已更新。");
+    });
+
+    videoReturnLastFrameInput.addEventListener("change", (event) => {
+      shot.videoConfig.returnLastFrame = Boolean(event.target.checked);
+      shot.updatedAt = new Date().toISOString();
+      queuePersistState("视频尾帧返回设置已更新。");
+    });
+
     fragment.querySelector(".generate-button").addEventListener("click", async (event) => {
       await handleGeneratePrompt(shot.id, event.currentTarget);
+    });
+
+    fragment.querySelector(".generate-video-button").addEventListener("click", async (event) => {
+      await handleGenerateVideo(shot.id, event.currentTarget);
+    });
+
+    fragment.querySelector(".refresh-video-button").addEventListener("click", async (event) => {
+      await handleRefreshVideoTask(shot.id, event.currentTarget);
+    });
+
+    fragment.querySelector(".clear-video-button").addEventListener("click", async () => {
+      clearVideoTaskState(shot);
+      await persistState("视频任务结果已清空。");
+      render();
     });
 
     fragment.querySelector(".save-button").addEventListener("click", async () => {
@@ -517,6 +635,7 @@ function render() {
       }
 
       state.shots = state.shots.filter((item) => item.id !== shot.id);
+      stopVideoPolling(shot.id);
       await persistState("镜头已删除。");
       render();
     });
@@ -861,6 +980,7 @@ function createFavoriteSnapshot(shot, options = {}) {
     dialogue: shot.dialogue || "",
     imageDataUrl: getShotCoverImage(shot),
     referenceFrames: structuredClone(shot.referenceFrames || []),
+    videoConfig: structuredClone(shot.videoConfig || createDefaultVideoConfig()),
     currentPrompt: shot.currentPrompt,
     promptHistory: structuredClone(shot.promptHistory || []),
     chatHistory: structuredClone(shot.chatHistory || []),
@@ -909,6 +1029,7 @@ function createWorkspaceShotFromFavorite(favorite) {
   shot.imageDataUrl = shot.type === "group" ? "" : (favorite.imageDataUrl || "");
   shot.linkedFavoriteId = favorite.id;
   shot.referenceFrames = structuredClone(favorite.referenceFrames || []);
+  shot.videoConfig = normalizeShotVideoConfig(favorite.videoConfig);
   if (shot.type === "group") {
     applyLegacyGroupDialogueToFrames(shot.referenceFrames, shot.dialogue);
   }
@@ -1131,13 +1252,17 @@ function bindImageDropZone(imageFrame, imageInput, shot) {
       return;
     }
 
-    if (!file.type.startsWith("image/")) {
+    if (!isProbablyImageFile(file)) {
       setStatus("请拖入图片文件。");
       return;
     }
 
-    await updateShotImage(shot, file, "拖拽图片上传成功。");
-    render();
+    try {
+      await updateShotImage(shot, file, "拖拽图片上传成功。");
+      render();
+    } catch (error) {
+      reportRuntimeError(error, "拖拽上传图片失败。");
+    }
   });
 }
 
@@ -1171,8 +1296,12 @@ function bindGroupUploadZone(uploadFrame, input, shot) {
       return;
     }
 
-    await addFilesToGroupShot(shot, files);
-    render();
+    try {
+      await addFilesToGroupShot(shot, files);
+      render();
+    } catch (error) {
+      reportRuntimeError(error, "拖拽上传镜头组图片失败。");
+    }
   });
 }
 
@@ -1243,9 +1372,14 @@ function renderReferenceFrames(container, shot) {
         return;
       }
 
-      await updateReferenceFrameImage(shot, frame, file, "镜头图已更新。");
-      event.target.value = "";
-      render();
+      try {
+        await updateReferenceFrameImage(shot, frame, file, "镜头图已更新。");
+        render();
+      } catch (error) {
+        reportRuntimeError(error, "子镜头图片上传失败。");
+      } finally {
+        event.target.value = "";
+      }
     });
 
     item.querySelector(".insert-reference-before").addEventListener("click", async () => {
@@ -1325,18 +1459,22 @@ function bindReferenceFrameDropZone(imageFrame, imageInput, shot, frame) {
       return;
     }
 
-    if (!file.type.startsWith("image/")) {
+    if (!isProbablyImageFile(file)) {
       setStatus("请拖入图片文件。");
       return;
     }
 
-    await updateReferenceFrameImage(shot, frame, file, "拖拽镜头图上传成功。");
-    render();
+    try {
+      await updateReferenceFrameImage(shot, frame, file, "拖拽镜头图上传成功。");
+      render();
+    } catch (error) {
+      reportRuntimeError(error, "拖拽上传子镜头图片失败。");
+    }
   });
 }
 
 async function addFilesToGroupShot(shot, files) {
-  const imageFiles = files.filter((file) => file.type.startsWith("image/"));
+  const imageFiles = files.filter((file) => isProbablyImageFile(file));
   if (!imageFiles.length) {
     setStatus("请上传图片文件。");
     return;
@@ -1648,6 +1786,267 @@ async function handleRevisePrompt(shotId, feedback, feedbackInput, button) {
   } finally {
     resetButtonLoading(button, originalLabel);
   }
+}
+
+async function handleGenerateVideo(shotId, button) {
+  const shot = getShotById(shotId);
+  if (!shot) {
+    return;
+  }
+
+  const prompt = shot.currentPrompt.trim();
+  if (!prompt) {
+    setStatus("请先生成或填写当前 Prompt，再提交视频任务。");
+    return;
+  }
+
+  const originalLabel = button.textContent;
+  const payload = buildVideoGenerationPayload(shot);
+
+  try {
+    setButtonLoading(button, "提交任务中...");
+    stopVideoPolling(shot.id);
+    const response = await fetch(VIDEO_BASE_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        apiKey: getCurrentVideoApiKey(),
+        provider: normalizeVideoProvider(state.settings.videoProvider),
+        ...payload,
+      }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(result.error || `视频任务提交失败（${response.status}）`);
+    }
+
+    shot.videoTask = {
+      id: String(result.taskId || ""),
+      status: normalizeVideoStatus(result.status || "queued"),
+      videoUrl: "",
+      coverImageUrl: "",
+      lastFrameUrl: "",
+      error: "",
+      origin: result.origin || "",
+      requestSummary: result.requestSummary || summarizeVideoPayload(payload),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    shot.updatedAt = new Date().toISOString();
+    await persistState("视频任务已提交，正在轮询结果。");
+    render();
+    startVideoPolling(shot.id);
+  } catch (error) {
+    setStatus(error.message || "提交视频任务失败。");
+  } finally {
+    resetButtonLoading(button, originalLabel);
+  }
+}
+
+async function handleRefreshVideoTask(shotId, button) {
+  const shot = getShotById(shotId);
+  if (!shot?.videoTask?.id) {
+    setStatus("这个镜头还没有已提交的视频任务。");
+    return;
+  }
+
+  const originalLabel = button.textContent;
+  try {
+    setButtonLoading(button, "刷新中...");
+    await refreshVideoTaskStatus(shotId, { silent: false });
+  } finally {
+    resetButtonLoading(button, originalLabel);
+  }
+}
+
+function buildVideoGenerationPayload(shot) {
+  const prompt = shot.currentPrompt.trim();
+  const videoConfig = normalizeShotVideoConfig(shot.videoConfig);
+  const referenceImages = getShotReferenceImages(shot);
+  const content = [
+    {
+      type: "text",
+      text: prompt,
+    },
+  ];
+
+  if (shot.type === "single") {
+    if (shot.imageDataUrl) {
+      content.push({
+        type: "image_url",
+        image_url: { url: shot.imageDataUrl },
+        role: "first_frame",
+      });
+    }
+  } else {
+    appendGroupVideoImages(content, shot, referenceImages, videoConfig.groupInputMode);
+  }
+
+  return {
+    model: normalizeVideoProvider(state.settings.videoProvider).model,
+    content,
+    groupInputMode: shot.type === "group" ? videoConfig.groupInputMode : "",
+    ratio: videoConfig.ratio,
+    duration: videoConfig.duration,
+    resolution: videoConfig.resolution || undefined,
+    seed: videoConfig.seed,
+    watermark: Boolean(videoConfig.watermark),
+    return_last_frame: Boolean(videoConfig.returnLastFrame),
+  };
+}
+
+function appendGroupVideoImages(content, shot, referenceImages, groupInputMode) {
+  const images = Array.isArray(referenceImages) ? referenceImages.filter(Boolean) : [];
+  if (!images.length) {
+    return;
+  }
+
+  if (groupInputMode === "first_last") {
+    const firstFrame = images[0];
+    const lastFrame = images.length > 1 ? images[images.length - 1] : "";
+    if (firstFrame) {
+      content.push({
+        type: "image_url",
+        image_url: { url: firstFrame },
+        role: "first_frame",
+      });
+    }
+    if (lastFrame) {
+      content.push({
+        type: "image_url",
+        image_url: { url: lastFrame },
+        role: "last_frame",
+      });
+    }
+    return;
+  }
+
+  const normalizedFrames = Array.isArray(shot.referenceFrames) ? shot.referenceFrames : [];
+  const usableFrames = normalizedFrames
+    .filter((frame) => frame?.imageDataUrl)
+    .slice(0, 4);
+
+  usableFrames.forEach((frame, index) => {
+    content.push({
+      type: "image_url",
+      image_url: { url: frame.imageDataUrl },
+      role: "reference",
+      name: frame.title?.trim() || `reference_${index + 1}`,
+    });
+  });
+}
+
+function summarizeVideoPayload(payload) {
+  return [
+    payload.groupInputMode === "reference" ? "镜头组多参考图" : "",
+    payload.groupInputMode === "first_last" ? "镜头组首尾帧" : "",
+    payload.ratio ? `比例 ${payload.ratio}` : "",
+    payload.duration ? `时长 ${payload.duration}s` : "",
+    payload.resolution ? `分辨率 ${payload.resolution}` : "",
+  ].filter(Boolean).join(" · ");
+}
+
+async function refreshVideoTaskStatus(shotId, options = {}) {
+  const { silent = true } = options;
+  const shot = getShotById(shotId);
+  if (!shot?.videoTask?.id) {
+    return;
+  }
+
+  try {
+    const response = await fetch(`${VIDEO_BASE_URL}/${encodeURIComponent(shot.videoTask.id)}?baseUrl=${encodeURIComponent(normalizeVideoProvider(state.settings.videoProvider).baseUrl)}`, {
+      headers: {
+        "x-video-api-key": getCurrentVideoApiKey(),
+      },
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(result.error || `获取视频任务状态失败（${response.status}）`);
+    }
+
+    const nextStatus = normalizeVideoStatus(result.status || shot.videoTask.status);
+    shot.videoTask = {
+      ...shot.videoTask,
+      status: nextStatus,
+      videoUrl: String(result.videoUrl || shot.videoTask.videoUrl || ""),
+      coverImageUrl: String(result.coverImageUrl || shot.videoTask.coverImageUrl || ""),
+      lastFrameUrl: String(result.lastFrameUrl || shot.videoTask.lastFrameUrl || ""),
+      error: String(result.error || ""),
+      updatedAt: new Date().toISOString(),
+    };
+    shot.updatedAt = new Date().toISOString();
+
+    if (isVideoTaskFinished(nextStatus)) {
+      stopVideoPolling(shotId);
+    }
+
+    await persistState(result.message || getVideoStatusMessage(nextStatus));
+    render();
+  } catch (error) {
+    stopVideoPolling(shotId);
+    shot.videoTask = {
+      ...(shot.videoTask || {}),
+      status: "failed",
+      error: error.message || "获取视频任务状态失败。",
+      updatedAt: new Date().toISOString(),
+    };
+    await persistState("视频任务状态刷新失败。");
+    render();
+    if (!silent) {
+      setStatus(error.message || "获取视频任务状态失败。");
+    }
+  }
+}
+
+function startVideoPolling(shotId) {
+  stopVideoPolling(shotId);
+  const timerId = window.setInterval(async () => {
+    const shot = getShotById(shotId);
+    if (!shot?.videoTask?.id || isVideoTaskFinished(shot.videoTask.status)) {
+      stopVideoPolling(shotId);
+      return;
+    }
+
+    await refreshVideoTaskStatus(shotId);
+  }, VIDEO_POLL_INTERVAL_MS);
+  videoPollTimers.set(shotId, timerId);
+}
+
+function stopVideoPolling(shotId) {
+  const timerId = videoPollTimers.get(shotId);
+  if (!timerId) {
+    return;
+  }
+
+  window.clearInterval(timerId);
+  videoPollTimers.delete(shotId);
+}
+
+function stopAllVideoPolling() {
+  Array.from(videoPollTimers.keys()).forEach((shotId) => {
+    stopVideoPolling(shotId);
+  });
+}
+
+function resumePendingVideoTasks() {
+  state.shots.forEach((shot) => {
+    const status = normalizeVideoStatus(shot.videoTask?.status);
+    if (shot.videoTask?.id && ["queued", "running"].includes(status)) {
+      startVideoPolling(shot.id);
+    }
+  });
+}
+
+function clearVideoTaskState(shot) {
+  if (!shot) {
+    return;
+  }
+
+  stopVideoPolling(shot.id);
+  shot.videoTask = createEmptyVideoTask();
+  shot.updatedAt = new Date().toISOString();
 }
 
 function buildGenerationInstruction(shot) {
@@ -2065,6 +2464,8 @@ function createShot(type = "single") {
     dialogue: "",
     imageDataUrl: "",
     referenceFrames: type === "group" ? [createReferenceFrame()] : [],
+    videoConfig: createDefaultVideoConfig(),
+    videoTask: createEmptyVideoTask(),
     currentPrompt: "",
     promptHistory: [],
     chatHistory: [],
@@ -2098,7 +2499,7 @@ async function createReferenceFrameFromFile(file) {
 }
 
 async function updateShotImage(shot, file, message) {
-  if (!file.type.startsWith("image/")) {
+  if (!isProbablyImageFile(file)) {
     setStatus("请选择图片文件。");
     return;
   }
@@ -2109,7 +2510,7 @@ async function updateShotImage(shot, file, message) {
 }
 
 async function updateReferenceFrameImage(shot, frame, file, message) {
-  if (!file.type.startsWith("image/")) {
+  if (!isProbablyImageFile(file)) {
     setStatus("请选择图片文件。");
     return;
   }
@@ -2138,8 +2539,221 @@ function createChatEntry(role, content) {
   };
 }
 
+function createDefaultVideoProvider() {
+  return {
+    baseUrl: DEFAULT_VIDEO_BASE_URL,
+    model: DEFAULT_VIDEO_MODEL,
+  };
+}
+
+function createDefaultVideoConfig() {
+  return {
+    groupInputMode: "reference",
+    ratio: "16:9",
+    duration: 5,
+    resolution: "",
+    seed: null,
+    watermark: false,
+    returnLastFrame: false,
+  };
+}
+
+function createEmptyVideoTask() {
+  return {
+    id: "",
+    status: "idle",
+    videoUrl: "",
+    coverImageUrl: "",
+    lastFrameUrl: "",
+    error: "",
+    origin: "",
+    requestSummary: "",
+    createdAt: "",
+    updatedAt: "",
+  };
+}
+
+function normalizeShotVideoConfig(input) {
+  return {
+    ...createDefaultVideoConfig(),
+    ...(input || {}),
+    groupInputMode: input?.groupInputMode === "first_last" ? "first_last" : "reference",
+    ratio: String(input?.ratio || "16:9").trim() || "16:9",
+    duration: clampVideoDuration(input?.duration),
+    resolution: String(input?.resolution || "").trim(),
+    seed: normalizeVideoSeed(input?.seed),
+    watermark: Boolean(input?.watermark),
+    returnLastFrame: Boolean(input?.returnLastFrame),
+  };
+}
+
+function normalizeVideoTask(input) {
+  return {
+    ...createEmptyVideoTask(),
+    ...(input || {}),
+    id: String(input?.id || ""),
+    status: normalizeVideoStatus(input?.status || "idle"),
+    videoUrl: String(input?.videoUrl || ""),
+    coverImageUrl: String(input?.coverImageUrl || ""),
+    lastFrameUrl: String(input?.lastFrameUrl || ""),
+    error: String(input?.error || ""),
+    origin: String(input?.origin || ""),
+    requestSummary: String(input?.requestSummary || ""),
+    createdAt: String(input?.createdAt || ""),
+    updatedAt: String(input?.updatedAt || ""),
+  };
+}
+
+function normalizeVideoProvider(input) {
+  const provider = {
+    ...createDefaultVideoProvider(),
+    ...(input || {}),
+  };
+
+  provider.baseUrl = String(provider.baseUrl || DEFAULT_VIDEO_BASE_URL).trim() || DEFAULT_VIDEO_BASE_URL;
+  provider.model = String(provider.model || DEFAULT_VIDEO_MODEL).trim() || DEFAULT_VIDEO_MODEL;
+  return provider;
+}
+
+function normalizeVideoStatus(status) {
+  const raw = String(status || "").trim().toLowerCase();
+  if (!raw) {
+    return "idle";
+  }
+
+  if (["queued", "pending", "submitted"].includes(raw)) {
+    return "queued";
+  }
+
+  if (["running", "processing", "in_progress"].includes(raw)) {
+    return "running";
+  }
+
+  if (["succeeded", "completed", "done", "success"].includes(raw)) {
+    return "succeeded";
+  }
+
+  if (["failed", "error"].includes(raw)) {
+    return "failed";
+  }
+
+  if (raw === "expired") {
+    return "expired";
+  }
+
+  return raw;
+}
+
+function isVideoTaskFinished(status) {
+  return ["succeeded", "failed", "expired"].includes(normalizeVideoStatus(status));
+}
+
+function getVideoStatusText(status) {
+  switch (normalizeVideoStatus(status)) {
+    case "queued":
+      return "任务排队中";
+    case "running":
+      return "视频生成中";
+    case "succeeded":
+      return "已生成完成";
+    case "failed":
+      return "任务失败";
+    case "expired":
+      return "任务已过期";
+    default:
+      return "尚未提交任务";
+  }
+}
+
+function getVideoStatusMessage(status) {
+  switch (normalizeVideoStatus(status)) {
+    case "queued":
+      return "视频任务已提交，正在排队。";
+    case "running":
+      return "视频任务仍在生成中。";
+    case "succeeded":
+      return "视频已生成完成。";
+    case "failed":
+      return "视频任务失败。";
+    case "expired":
+      return "视频任务已过期。";
+    default:
+      return "视频任务状态已更新。";
+  }
+}
+
+function clampVideoDuration(value) {
+  const duration = Number.parseInt(value, 10);
+  if (!Number.isFinite(duration)) {
+    return 5;
+  }
+
+  return Math.max(2, Math.min(12, duration));
+}
+
+function normalizeVideoSeed(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  const seed = Number.parseInt(value, 10);
+  return Number.isFinite(seed) && seed >= 0 ? seed : null;
+}
+
+function renderVideoResult({ shot, videoTaskLabel, generatedVideo, videoLastFrame, videoResultEmpty, videoResultMeta }) {
+  const task = normalizeVideoTask(shot.videoTask);
+  const hasVideo = Boolean(task.videoUrl);
+  const hasLastFrame = Boolean(task.lastFrameUrl);
+  const hasResult = hasVideo || hasLastFrame;
+
+  videoTaskLabel.textContent = task.id ? `${getVideoStatusText(task.status)} · ${task.id}` : "尚未提交任务";
+  videoResultEmpty.hidden = hasResult;
+  generatedVideo.hidden = !hasVideo;
+  videoLastFrame.hidden = !hasLastFrame;
+
+  if (hasVideo) {
+    generatedVideo.src = task.videoUrl;
+  } else {
+    generatedVideo.removeAttribute("src");
+  }
+
+  if (hasLastFrame) {
+    videoLastFrame.src = task.lastFrameUrl;
+  } else {
+    videoLastFrame.removeAttribute("src");
+  }
+
+  const metaLines = [];
+  if (task.requestSummary) {
+    metaLines.push(`本次参数：${escapeHtml(task.requestSummary)}`);
+  }
+  if (task.updatedAt) {
+    metaLines.push(`最近刷新：${escapeHtml(formatTime(task.updatedAt))}`);
+  }
+  if (task.error) {
+    metaLines.push(`错误：${escapeHtml(task.error)}`);
+  }
+  if (hasVideo) {
+    metaLines.push(`<a href="${escapeHtml(task.videoUrl)}" target="_blank" rel="noopener noreferrer">打开视频链接</a>`);
+  }
+
+  videoResultMeta.innerHTML = metaLines.join("<br>");
+}
+
 function isReferenceFrameEmpty(frame) {
   return !frame?.title && !frame?.notes && !frame?.dialogue && !frame?.imageDataUrl;
+}
+
+function isProbablyImageFile(file) {
+  if (!file) {
+    return false;
+  }
+
+  if (String(file.type || "").startsWith("image/")) {
+    return true;
+  }
+
+  return /\.(png|jpe?g|webp|gif|bmp|heic|heif|avif)$/i.test(String(file.name || ""));
 }
 
 function isShotEmpty(shot) {
@@ -2215,6 +2829,8 @@ function normalizeState(input) {
       provider: normalizeProvider(input?.settings?.provider, input?.settings?.model),
       model: normalizeModel(input?.settings?.provider, input?.settings?.model),
       apiKeys: normalizeApiKeys(input?.settings),
+      videoApiKey: String(input?.settings?.videoApiKey || "").trim(),
+      videoProvider: normalizeVideoProvider(input?.settings?.videoProvider),
       customProvider: normalizeCustomProvider(input?.settings?.customProvider, input?.settings?.model),
     },
     shots: shots.length ? shots.map(normalizeShot) : [createShot()],
@@ -2289,6 +2905,8 @@ function normalizeShot(input) {
     dialogue,
     imageDataUrl: type === "single" ? (input?.imageDataUrl || "") : (input?.imageDataUrl || ""),
     referenceFrames,
+    videoConfig: normalizeShotVideoConfig(input?.videoConfig),
+    videoTask: normalizeVideoTask(input?.videoTask),
     currentPrompt: input?.currentPrompt || "",
     promptHistory: Array.isArray(input?.promptHistory) ? input.promptHistory.map(normalizeHistoryEntry) : [],
     chatHistory: Array.isArray(input?.chatHistory) ? input.chatHistory : [],
@@ -2313,6 +2931,7 @@ function normalizeFavorite(input) {
     dialogue,
     imageDataUrl: input?.imageDataUrl || "",
     referenceFrames,
+    videoConfig: normalizeShotVideoConfig(input?.videoConfig),
     currentPrompt: input?.currentPrompt || "",
     promptHistory: Array.isArray(input?.promptHistory) ? input.promptHistory.map(normalizeHistoryEntry) : [],
     tags: normalizeFavoriteTags(input?.tags),
@@ -2580,6 +3199,10 @@ function getCurrentApiKey() {
   return "";
 }
 
+function getCurrentVideoApiKey() {
+  return String(state.settings.videoApiKey || "").trim();
+}
+
 function getShotReferenceImages(shot) {
   if (shot.type === "group") {
     return (shot.referenceFrames || [])
@@ -2606,6 +3229,21 @@ function setStatus(message) {
   elements.statusText.textContent = message;
 }
 
+function reportRuntimeError(error, fallbackMessage) {
+  console.error(error);
+  setStatus(error?.message || fallbackMessage);
+}
+
+function bindRuntimeErrorReporting() {
+  window.addEventListener("error", (event) => {
+    reportRuntimeError(event.error || new Error(event.message || "页面运行出错。"), "页面运行出错。");
+  });
+
+  window.addEventListener("unhandledrejection", (event) => {
+    reportRuntimeError(event.reason instanceof Error ? event.reason : new Error(String(event.reason || "存在未处理的异步错误。")), "存在未处理的异步错误。");
+  });
+}
+
 function formatTime(isoString) {
   return new Date(isoString).toLocaleString("zh-CN", {
     year: "numeric",
@@ -2618,21 +3256,28 @@ function formatTime(isoString) {
 
 function openSettingsModal() {
   uiState.isEditingApiKey = !getCurrentApiKey();
+  uiState.isEditingVideoApiKey = !getCurrentVideoApiKey();
   renderSettingsModal();
   elements.settingsModal.hidden = false;
 }
 
 function closeSettingsModal() {
   uiState.isEditingApiKey = false;
+  uiState.isEditingVideoApiKey = false;
   elements.settingsModal.hidden = true;
 }
 
 function renderSettingsModal() {
   const provider = getCurrentProviderConfig();
+  const videoProvider = normalizeVideoProvider(state.settings.videoProvider);
   const currentApiKey = getCurrentApiKey();
+  const currentVideoApiKey = getCurrentVideoApiKey();
   const hasApiKey = Boolean(currentApiKey);
+  const hasVideoApiKey = Boolean(currentVideoApiKey);
   const shouldEditApiKey = uiState.isEditingApiKey || !hasApiKey;
+  const shouldEditVideoApiKey = uiState.isEditingVideoApiKey || !hasVideoApiKey;
   const maskedApiKey = hasApiKey ? maskApiKey(currentApiKey) : "未设置";
+  const maskedVideoApiKey = hasVideoApiKey ? maskApiKey(currentVideoApiKey) : "未设置（也可以直接用服务端环境变量 ARK_API_KEY）";
   const providerChipsMarkup = Object.values(PROVIDER_CONFIGS)
     .map((item) => {
       const isActive = provider.id === item.id;
@@ -2707,6 +3352,43 @@ function renderSettingsModal() {
             </label>
           </div>
         </section>
+        <section class="prompt-panel settings-panel">
+          <div class="favorite-block">
+            <h3>Seedance API Key</h3>
+            ${shouldEditVideoApiKey ? `
+              <label class="field compact">
+                <span>可本地保存，也可留空并改用服务端环境变量 ARK_API_KEY</span>
+                <input class="settings-video-api-key-input" type="password" placeholder="输入 Seedance / ARK API Key" autocomplete="off">
+              </label>
+              <div class="card-actions">
+                <button class="secondary-button settings-save-video-api-button" type="button">保存 Video Key</button>
+                ${hasVideoApiKey ? '<button class="ghost-button settings-cancel-video-api-button" type="button">取消</button>' : ""}
+              </div>
+            ` : `
+              <div class="secure-field">
+                <span class="secure-label">已加密显示</span>
+                <div class="secure-value secure-video-value" tabindex="0">${escapeHtml(maskedVideoApiKey)}</div>
+              </div>
+              <div class="card-actions">
+                <button class="ghost-button settings-edit-video-api-button" type="button">重新输入</button>
+              </div>
+            `}
+          </div>
+        </section>
+        <section class="prompt-panel settings-panel">
+          <div class="favorite-block">
+            <h3>视频生成服务</h3>
+            <label class="field compact">
+              <span>视频 API Base URL</span>
+              <input class="settings-video-base-url-input" type="text" value="${escapeHtml(videoProvider.baseUrl)}" placeholder="${escapeHtml(DEFAULT_VIDEO_BASE_URL)}">
+            </label>
+            <label class="field compact">
+              <span>视频模型 ID</span>
+              <input class="settings-video-model-input" type="text" value="${escapeHtml(videoProvider.model)}" placeholder="${escapeHtml(DEFAULT_VIDEO_MODEL)}">
+            </label>
+            <p class="meta">当前版本默认按火山方舟 Seedance 异步任务接口创建任务，并通过服务端 /api/video-tasks 代理提交与查询。</p>
+          </div>
+        </section>
       </div>
     </article>
   `;
@@ -2772,6 +3454,23 @@ function renderSettingsModal() {
     });
   }
 
+  const videoBaseUrlInput = elements.settingsModalContent.querySelector(".settings-video-base-url-input");
+  const videoModelInput = elements.settingsModalContent.querySelector(".settings-video-model-input");
+  videoBaseUrlInput?.addEventListener("input", (event) => {
+    state.settings.videoProvider = {
+      ...normalizeVideoProvider(state.settings.videoProvider),
+      baseUrl: event.target.value,
+    };
+    queuePersistState("视频 API 地址已更新。");
+  });
+  videoModelInput?.addEventListener("input", (event) => {
+    state.settings.videoProvider = {
+      ...normalizeVideoProvider(state.settings.videoProvider),
+      model: event.target.value,
+    };
+    queuePersistState("视频模型设置已更新。");
+  });
+
   if (shouldEditApiKey) {
     const apiInput = elements.settingsModalContent.querySelector(".settings-api-key-input");
     const saveButton = elements.settingsModalContent.querySelector(".settings-save-api-button");
@@ -2798,21 +3497,44 @@ function renderSettingsModal() {
       uiState.isEditingApiKey = false;
       renderSettingsModal();
     });
-    return;
   }
 
-  const secureValue = elements.settingsModalContent.querySelector(".secure-value");
-  ["copy", "cut", "dragstart", "contextmenu"].forEach((eventName) => {
-    secureValue.addEventListener(eventName, (event) => {
+  if (shouldEditVideoApiKey) {
+    const videoApiInput = elements.settingsModalContent.querySelector(".settings-video-api-key-input");
+    const saveVideoButton = elements.settingsModalContent.querySelector(".settings-save-video-api-button");
+    const cancelVideoButton = elements.settingsModalContent.querySelector(".settings-cancel-video-api-button");
+
+    saveVideoButton?.addEventListener("click", () => {
+      state.settings.videoApiKey = videoApiInput.value.trim();
+      uiState.isEditingVideoApiKey = false;
+      queuePersistState(state.settings.videoApiKey ? "视频 API Key 已本地保存。" : "视频 API Key 已清空，将改用服务端环境变量。");
+      renderSettingsModal();
+    });
+
+    cancelVideoButton?.addEventListener("click", () => {
+      uiState.isEditingVideoApiKey = false;
+      renderSettingsModal();
+    });
+  }
+
+  elements.settingsModalContent.querySelectorAll(".secure-value").forEach((secureValue) => {
+    ["copy", "cut", "dragstart", "contextmenu"].forEach((eventName) => {
+      secureValue.addEventListener(eventName, (event) => {
+        event.preventDefault();
+      });
+    });
+    secureValue.addEventListener("selectstart", (event) => {
       event.preventDefault();
     });
   });
-  secureValue.addEventListener("selectstart", (event) => {
-    event.preventDefault();
+
+  elements.settingsModalContent.querySelector(".settings-edit-api-button")?.addEventListener("click", () => {
+    uiState.isEditingApiKey = true;
+    renderSettingsModal();
   });
 
-  elements.settingsModalContent.querySelector(".settings-edit-api-button").addEventListener("click", () => {
-    uiState.isEditingApiKey = true;
+  elements.settingsModalContent.querySelector(".settings-edit-video-api-button")?.addEventListener("click", () => {
+    uiState.isEditingVideoApiKey = true;
     renderSettingsModal();
   });
 }
@@ -2971,6 +3693,10 @@ function readTextFile(file) {
 }
 
 async function optimizeImageFile(file) {
+  if (!isProbablyImageFile(file)) {
+    throw new Error("请选择可识别的图片文件。");
+  }
+
   const image = await loadImageFromFile(file);
   const { width, height } = getOptimizedImageSize(image.width, image.height);
   const canvas = document.createElement("canvas");
@@ -2994,7 +3720,7 @@ function loadImageFromFile(file) {
     reader.onload = () => {
       const image = new Image();
       image.onload = () => resolve(image);
-      image.onerror = () => reject(new Error("图片解码失败。"));
+      image.onerror = () => reject(new Error("图片解码失败。请尝试 JPG、PNG 或 WebP。"));
       image.src = String(reader.result || "");
     };
     reader.onerror = () => reject(new Error("读取图片失败。"));
