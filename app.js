@@ -839,8 +839,11 @@ function renderFavoriteHistory(container, entries, favoriteId = "") {
           <button class="ghost-button archive-rate-button" type="button">${renderArchiveStars(entry.rating || 0)}</button>
         </div>
       </header>
-      <p>${escapeHtml(entry.prompt)}</p>
+      <p class="truncatable">${escapeHtml(entry.prompt)}</p>
     `;
+    item.querySelector("p.truncatable").addEventListener("click", () => {
+      item.classList.toggle("is-expanded");
+    });
     item.querySelector(".archive-rate-button").addEventListener("click", async () => {
       const favorite = state.favorites.find((item) => item.id === favoriteId);
       const favoriteEntry = favorite?.promptHistory?.find((item) => item.id === entry.id);
@@ -856,9 +859,62 @@ function renderFavoriteHistory(container, entries, favoriteId = "") {
   });
 }
 
+function renderFavoriteVideoHistory(container, favorite) {
+  container.innerHTML = "";
+  const history = favorite.videoHistory || [];
+  if (!history.length) {
+    container.innerHTML = '<div class="empty-state">暂无视频归档。</div>';
+    return;
+  }
+
+  [...history].reverse().forEach((entry) => {
+    const item = document.createElement("div");
+    item.className = "video-history-item";
+    const hasVideo = Boolean(entry.videoUrl);
+    item.innerHTML = `
+      ${entry.requestSummary ? `<p class="video-history-meta">${escapeHtml(entry.requestSummary)}</p>` : ""}
+      ${entry.prompt ? `<p class="truncatable video-history-prompt">${escapeHtml(entry.prompt)}</p>` : ""}
+      ${hasVideo ? `<video src="${escapeHtml(entry.videoUrl)}" controls playsinline></video>` : ""}
+      ${hasVideo ? `<p class="video-history-meta"><a href="${escapeHtml(entry.videoUrl)}" target="_blank" rel="noopener noreferrer">打开视频链接</a></p>` : ""}
+    `;
+    const promptEl = item.querySelector("p.truncatable");
+    if (promptEl) {
+      promptEl.addEventListener("click", () => item.classList.toggle("is-expanded"));
+    }
+    container.append(item);
+  });
+}
+
 function renderFavoriteModal(favorite) {
-  const firstImageRef = (favorite.references || []).find((r) => r.mediaType === "image" && r.url);
-  const initialPreviewImage = firstImageRef?.url || "";
+  const refs = favorite.references || [];
+  const roleLabels = { first_frame: "首帧", last_frame: "尾帧", reference_image: "参考图" };
+
+  const referencesHtml = refs.length
+    ? refs.map((ref) => {
+        let preview = "";
+        if (ref.mediaType === "image" && ref.url) {
+          preview = `<img class="favorite-ref-preview" src="${escapeHtml(ref.url)}" alt="${escapeHtml(ref.title || "参考图")}" data-url="${escapeHtml(ref.url)}">`;
+        } else if (ref.mediaType === "video") {
+          preview = '<div class="reference-item-icon">视频</div>';
+        } else if (ref.mediaType === "audio") {
+          preview = '<div class="reference-item-icon">音频</div>';
+        }
+        const roleText = roleLabels[ref.role] || "自动";
+        return `<div class="favorite-ref-item">
+          ${preview}
+          <span class="favorite-ref-title">${escapeHtml(ref.title || ref.mediaType)}</span>
+          <span class="favorite-ref-role">${roleText}</span>
+        </div>`;
+      }).join("")
+    : '<div class="empty-state">暂无参考素材</div>';
+
+  const videoHistoryHtml = (favorite.videoHistory || []).length
+    ? `<div class="favorite-block">
+        <button class="favorite-video-toggle" type="button" aria-expanded="false">展开视频归档（${favorite.videoHistory.length} 条）</button>
+        <div class="favorite-video-history is-collapsed"></div>
+      </div>`
+    : "";
+
   elements.favoriteModalContent.innerHTML = `
     <article class="shot-card favorite-detail-card">
       <div class="panel-header">
@@ -870,11 +926,7 @@ function renderFavoriteModal(favorite) {
         </div>
       </div>
       <div class="favorite-detail-body">
-        <section class="image-panel favorite-detail-panel">
-          <div class="image-frame favorite-detail-image ${initialPreviewImage ? "has-image" : ""}">
-            <img class="shot-image" src="${escapeHtml(initialPreviewImage)}" alt="${escapeHtml(favorite.title || "收藏镜头图")}">
-            <div class="image-empty">未上传镜头图</div>
-          </div>
+        <section class="favorite-detail-panel">
           <div class="favorite-meta-list">
             <p class="favorite-title">${escapeHtml(favorite.title || "未命名镜头")}</p>
             <p class="favorite-time meta">收藏时间：${formatTime(favorite.favoritedAt)}</p>
@@ -885,34 +937,48 @@ function renderFavoriteModal(favorite) {
           </label>
           <div class="favorite-tag-list">${renderFavoriteTags(favorite.tags || [])}</div>
         </section>
-        <section class="prompt-panel favorite-detail-panel">
+        <section class="favorite-detail-panel">
           <div class="favorite-block">
-            <h3>导演讲戏</h3>
-            <p class="favorite-notes">${escapeHtml(favorite.directorNotes || "暂无导演讲戏")}</p>
+            <h3>全能参考 / 图生视频</h3>
+            <div class="favorite-refs-grid">${referencesHtml}</div>
           </div>
         </section>
-        <section class="prompt-panel favorite-detail-panel">
+        ${favorite.directorNotes ? `
+        <section class="favorite-detail-panel">
+          <div class="favorite-block">
+            <h3>导演讲戏</h3>
+            <p class="favorite-notes">${escapeHtml(favorite.directorNotes)}</p>
+          </div>
+        </section>` : ""}
+        <section class="favorite-detail-panel">
           <div class="favorite-block">
             <h3>当前 Prompt</h3>
             <p class="favorite-prompt">${escapeHtml(favorite.currentPrompt || "暂无 Prompt")}</p>
           </div>
         </section>
-        <section class="prompt-panel favorite-detail-panel">
+        <section class="favorite-detail-panel">
           <div class="favorite-block">
-            <button class="favorite-archive-toggle" type="button" aria-expanded="false">展开 Prompt归档</button>
+            <button class="favorite-archive-toggle" type="button" aria-expanded="false">展开 Prompt归档（${(favorite.promptHistory || []).length} 条）</button>
             <div class="favorite-history is-collapsed"></div>
           </div>
         </section>
+        ${videoHistoryHtml ? `<section class="favorite-detail-panel">${videoHistoryHtml}</section>` : ""}
       </div>
     </article>
   `;
 
   const historyContainer = elements.favoriteModalContent.querySelector(".favorite-history");
   const archiveToggleButton = elements.favoriteModalContent.querySelector(".favorite-archive-toggle");
-  const previewImage = elements.favoriteModalContent.querySelector(".favorite-detail-image");
-  const previewImageElement = previewImage?.querySelector(".shot-image");
 
   renderFavoriteHistory(historyContainer, favorite.promptHistory || [], favorite.id);
+
+  elements.favoriteModalContent.querySelectorAll(".favorite-ref-preview").forEach((img) => {
+    img.style.cursor = "pointer";
+    img.addEventListener("click", () => {
+      openLightbox(img.dataset.url, favorite.title);
+    });
+  });
+
   const tagsInput = elements.favoriteModalContent.querySelector(".favorite-tags-input");
   tagsInput.addEventListener("change", async (event) => {
     await saveFavoriteTags(favorite.id, event.currentTarget.value);
@@ -942,13 +1008,28 @@ function renderFavoriteModal(favorite) {
     });
   });
   archiveToggleButton.addEventListener("click", () => {
-    const button = archiveToggleButton;
-    const history = historyContainer;
-    const expanded = button.getAttribute("aria-expanded") === "true";
-    button.setAttribute("aria-expanded", String(!expanded));
-    button.textContent = expanded ? "展开 Prompt归档" : "收起 Prompt归档";
-    history.classList.toggle("is-collapsed", expanded);
+    const expanded = archiveToggleButton.getAttribute("aria-expanded") === "true";
+    archiveToggleButton.setAttribute("aria-expanded", String(!expanded));
+    archiveToggleButton.textContent = expanded
+      ? `展开 Prompt归档（${(favorite.promptHistory || []).length} 条）`
+      : `收起 Prompt归档`;
+    historyContainer.classList.toggle("is-collapsed", expanded);
   });
+
+  const videoToggle = elements.favoriteModalContent.querySelector(".favorite-video-toggle");
+  const videoHistoryContainer = elements.favoriteModalContent.querySelector(".favorite-video-history");
+  if (videoToggle && videoHistoryContainer) {
+    renderFavoriteVideoHistory(videoHistoryContainer, favorite);
+    videoToggle.addEventListener("click", () => {
+      const expanded = videoToggle.getAttribute("aria-expanded") === "true";
+      videoToggle.setAttribute("aria-expanded", String(!expanded));
+      videoToggle.textContent = expanded
+        ? `展开视频归档（${(favorite.videoHistory || []).length} 条）`
+        : `收起视频归档`;
+      videoHistoryContainer.classList.toggle("is-collapsed", expanded);
+    });
+  }
+
   elements.favoriteModalContent.querySelector(".favorite-detail-move").addEventListener("click", async () => {
     await moveFavoriteToWorkspace(favorite);
   });
@@ -956,13 +1037,6 @@ function renderFavoriteModal(favorite) {
     await deleteFavoritesByIds([favorite.id]);
   });
   elements.favoriteModalContent.querySelector(".favorite-detail-close").addEventListener("click", closeFavoriteModal);
-  elements.favoriteModalContent.querySelector(".favorite-detail-image").addEventListener("click", () => {
-    const currentPreviewSrc = previewImageElement?.getAttribute("src") || "";
-    if (!currentPreviewSrc) {
-      return;
-    }
-    openLightbox(currentPreviewSrc, favorite.title);
-  });
 }
 
 function isFavoriteShot(shotId) {

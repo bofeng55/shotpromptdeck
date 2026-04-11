@@ -734,8 +734,40 @@ button:disabled {
   min-width: 0;
 }
 
-.favorite-detail-image.has-image {
-  cursor: zoom-in;
+.favorite-refs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.favorite-ref-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: center;
+  font-size: 0.85rem;
+}
+
+.favorite-ref-preview {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  cursor: pointer;
+}
+
+.favorite-ref-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.favorite-ref-role {
+  font-size: 0.78rem;
+  color: var(--muted);
 }
 
 .favorite-tile {
