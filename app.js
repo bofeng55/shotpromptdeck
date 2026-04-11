@@ -1100,7 +1100,6 @@ function renderReferences(container, shot) {
   container.innerHTML = "";
 
   if (!shot.references.length) {
-    container.innerHTML = '<div class="empty-state">暂无参考素材。拖拽或点击下方区域上传图片、视频或音频。</div>';
     return;
   }
 

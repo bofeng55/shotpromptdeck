@@ -949,6 +949,15 @@ button:disabled {
   border: 1px solid var(--line);
 }
 
+.references-upload-zone .drag-tip {
+  font-size: 0.95rem;
+  color: var(--accent);
+  font-weight: 500;
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
 .references-editor {
   margin-top: 14px;
 }
@@ -1033,10 +1042,11 @@ button:disabled {
 
 .references-upload-zone {
   position: relative;
-  border: 1px dashed var(--line);
+  border: 2px dashed var(--accent);
   border-radius: 14px;
-  padding: 16px;
+  padding: 24px 16px;
   text-align: center;
+  background: rgba(184, 90, 49, 0.03);
   cursor: pointer;
   color: var(--muted);
   font-size: 0.9rem;
