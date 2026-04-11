@@ -379,13 +379,9 @@ function render() {
   state.shots.forEach((shot, index) => {
     const fragment = elements.shotTemplate.content.cloneNode(true);
     const card = fragment.querySelector(".shot-card");
-    const imageFrame = fragment.querySelector(".image-frame");
-    const image = fragment.querySelector(".shot-image");
-    const imageEmpty = fragment.querySelector(".image-empty");
     const order = fragment.querySelector(".shot-order");
     const titleInput = fragment.querySelector(".shot-title");
     const directorNotesInput = fragment.querySelector(".director-notes");
-    const imageInput = fragment.querySelector(".shot-image-input");
     const promptInput = fragment.querySelector(".shot-prompt");
     const feedbackInput = fragment.querySelector(".feedback-input");
     const historyList = fragment.querySelector(".history-list");
@@ -442,16 +438,6 @@ function render() {
     renderVideoHistory(videoHistoryList, shot);
     videoHistoryCount.textContent = `${(shot.videoHistory || []).length} 条归档`;
 
-    imageEmpty.innerHTML = '<span class="drag-tip">拖拽图片到这里，或点击上传</span>';
-
-    if (shot.imageDataUrl) {
-      imageFrame.classList.add("has-image");
-      image.src = shot.imageDataUrl;
-      image.alt = shot.title ? `${shot.title} 放大预览` : "镜头图放大预览";
-    }
-
-    bindImageDropZone(imageFrame, imageInput, shot);
-
     renderReferences(referencesList, shot);
     updateReferencesCapacity(referencesCapacity, shot);
     bindReferencesUploadZone(referencesUploadZone, referencesUploadInput, shot);
@@ -472,22 +458,6 @@ function render() {
       shot.directorNotes = event.target.value;
       shot.updatedAt = new Date().toISOString();
       queuePersistState("导演讲戏已更新。");
-    });
-
-    imageInput.addEventListener("change", async (event) => {
-      const [file] = Array.from(event.target.files || []);
-      if (!file) {
-        return;
-      }
-
-      try {
-        await updateShotImage(shot, file, "镜头图片已更新。");
-        render();
-      } catch (error) {
-        reportRuntimeError(error, "镜头图片上传失败。");
-      } finally {
-        imageInput.value = "";
-      }
     });
 
     promptInput.addEventListener("input", async (event) => {
@@ -683,9 +653,10 @@ function renderFavorites() {
     const tile = fragment.querySelector(".favorite-tile");
     const actions = fragment.querySelector(".favorite-tile-actions");
 
-    if (favorite.imageDataUrl) {
+    const favCoverImage = (favorite.references || []).find((r) => r.mediaType === "image" && r.url);
+    if (favCoverImage) {
       imageFrame.classList.add("has-image");
-      image.src = favorite.imageDataUrl;
+      image.src = favCoverImage.url;
     }
     image.alt = favorite.title ? `${favorite.title} 收藏预览` : "收藏镜头图预览";
     title.textContent = favorite.title || "未命名镜头";
@@ -752,7 +723,8 @@ function renderFavoriteHistory(container, entries, favoriteId = "") {
 }
 
 function renderFavoriteModal(favorite) {
-  const initialPreviewImage = favorite.imageDataUrl || "";
+  const firstImageRef = (favorite.references || []).find((r) => r.mediaType === "image" && r.url);
+  const initialPreviewImage = firstImageRef?.url || "";
   elements.favoriteModalContent.innerHTML = `
     <article class="shot-card favorite-detail-card">
       <div class="panel-header">
@@ -902,7 +874,6 @@ function createFavoriteSnapshot(shot, options = {}) {
     shotId: existing?.shotId || shot.id,
     title: shot.title,
     directorNotes: shot.directorNotes,
-    imageDataUrl: getShotCoverImage(shot),
     references: structuredClone(shot.references || []),
     videoConfig: structuredClone(shot.videoConfig || createDefaultVideoConfig()),
     currentPrompt: shot.currentPrompt,
@@ -949,7 +920,6 @@ function createWorkspaceShotFromFavorite(favorite) {
   const shot = createShot();
   shot.title = favorite.title || "";
   shot.directorNotes = favorite.directorNotes || "";
-  shot.imageDataUrl = favorite.imageDataUrl || "";
   shot.linkedFavoriteId = favorite.id;
   shot.references = structuredClone(favorite.references || []);
   shot.videoConfig = normalizeShotVideoConfig(favorite.videoConfig);
@@ -1124,67 +1094,6 @@ function closeFavoriteModal() {
   elements.favoriteModal.hidden = true;
   elements.favoriteModalContent.innerHTML = "";
   document.body.classList.remove("lightbox-open");
-}
-
-function bindImageDropZone(imageFrame, imageInput, shot) {
-  imageFrame.querySelector(".image-delete-button")?.addEventListener("click", async (event) => {
-    event.stopPropagation();
-    if (!shot.imageDataUrl) {
-      return;
-    }
-
-    shot.imageDataUrl = "";
-    shot.updatedAt = new Date().toISOString();
-    await persistState("图片已删除。");
-    render();
-  });
-
-  imageFrame.addEventListener("click", () => {
-    if (shot.imageDataUrl) {
-      openLightbox(shot.imageDataUrl, shot.title);
-      return;
-    }
-
-    imageInput.click();
-  });
-
-  imageFrame.addEventListener("dragover", (event) => {
-    event.preventDefault();
-    imageFrame.classList.add("drag-over");
-  });
-
-  imageFrame.addEventListener("dragenter", (event) => {
-    event.preventDefault();
-    imageFrame.classList.add("drag-over");
-  });
-
-  imageFrame.addEventListener("dragleave", (event) => {
-    if (event.currentTarget.contains(event.relatedTarget)) {
-      return;
-    }
-    imageFrame.classList.remove("drag-over");
-  });
-
-  imageFrame.addEventListener("drop", async (event) => {
-    event.preventDefault();
-    imageFrame.classList.remove("drag-over");
-    const [file] = Array.from(event.dataTransfer?.files || []);
-    if (!file) {
-      return;
-    }
-
-    if (!isProbablyImageFile(file)) {
-      setStatus("请拖入图片文件。");
-      return;
-    }
-
-    try {
-      await updateShotImage(shot, file, "拖拽图片上传成功。");
-      render();
-    } catch (error) {
-      reportRuntimeError(error, "拖拽上传图片失败。");
-    }
-  });
 }
 
 function renderReferences(container, shot) {
@@ -1997,21 +1906,6 @@ function buildVideoGenerationPayload(shot) {
     },
   ];
 
-  const hasFirstFrame = (shot.references || []).some((r) => r.role === "first_frame");
-  if (shot.imageDataUrl && !hasFirstFrame) {
-    content.push({
-      type: "image_url",
-      image_url: { url: shot.imageDataUrl },
-      role: "first_frame",
-    });
-  } else if (shot.imageDataUrl) {
-    content.push({
-      type: "image_url",
-      image_url: { url: shot.imageDataUrl },
-      role: "reference_image",
-    });
-  }
-
   for (const ref of (shot.references || [])) {
     if (ref.mediaType === "image" && ref.url) {
       content.push({
@@ -2587,7 +2481,6 @@ function createShot() {
     linkedFavoriteId: "",
     title: "",
     directorNotes: "",
-    imageDataUrl: "",
     references: [],
     videoConfig: createDefaultVideoConfig(),
     videoTask: createEmptyVideoTask(),
@@ -2613,19 +2506,9 @@ function createReference(mediaType, url, role, title) {
 async function createShotFromFile(file) {
   const shot = createShot();
   shot.title = file.name.replace(/\.[^.]+$/, "");
-  shot.imageDataUrl = await optimizeImageFile(file);
+  const url = await optimizeImageFile(file);
+  shot.references.push(createReference("image", url, "first_frame", "图片1"));
   return shot;
-}
-
-async function updateShotImage(shot, file, message) {
-  if (!isProbablyImageFile(file)) {
-    setStatus("请选择图片文件。");
-    return;
-  }
-
-  shot.imageDataUrl = await optimizeImageFile(file);
-  shot.updatedAt = new Date().toISOString();
-  await persistState(message);
 }
 
 function createHistoryEntry(prompt, label) {
@@ -2952,7 +2835,6 @@ function isProbablyImageFile(file) {
 function isShotEmpty(shot) {
   return !shot.title
     && !shot.directorNotes
-    && !shot.imageDataUrl
     && !(shot.references || []).length
     && !shot.currentPrompt
     && !shot.promptHistory.length
@@ -3083,7 +2965,6 @@ function normalizeApiKeys(settings) {
 function normalizeShot(input) {
   const now = new Date().toISOString();
   let references = normalizeReferences(input?.references);
-  let imageDataUrl = input?.imageDataUrl || "";
 
   // Migration: convert old group shots with referenceFrames to references
   if (input?.type === "group" && Array.isArray(input?.referenceFrames) && input.referenceFrames.length) {
@@ -3093,9 +2974,11 @@ function normalizeShot(input) {
     if (migratedRefs.length && !references.length) {
       references = migratedRefs;
     }
-    if (!imageDataUrl && input.referenceFrames[0]?.imageDataUrl) {
-      imageDataUrl = input.referenceFrames[0].imageDataUrl;
-    }
+  }
+
+  // Migration: convert imageDataUrl to a first_frame reference
+  if (input?.imageDataUrl && !references.some((r) => r.role === "first_frame")) {
+    references.unshift(createReference("image", input.imageDataUrl, "first_frame", "图片1"));
   }
 
   return {
@@ -3103,7 +2986,6 @@ function normalizeShot(input) {
     linkedFavoriteId: input?.linkedFavoriteId || "",
     title: input?.title || "",
     directorNotes: input?.directorNotes || "",
-    imageDataUrl,
     references,
     videoConfig: normalizeShotVideoConfig(input?.videoConfig),
     videoTask: normalizeVideoTask(input?.videoTask),
@@ -3130,12 +3012,16 @@ function normalizeFavorite(input) {
     }
   }
 
+  // Migration: convert imageDataUrl to a first_frame reference
+  if (input?.imageDataUrl && !references.some((r) => r.role === "first_frame")) {
+    references.unshift(createReference("image", input.imageDataUrl, "first_frame", "图片1"));
+  }
+
   return {
     id: input?.id || crypto.randomUUID(),
     shotId: input?.shotId || "",
     title: input?.title || "",
     directorNotes: input?.directorNotes || "",
-    imageDataUrl: input?.imageDataUrl || "",
     references,
     videoConfig: normalizeShotVideoConfig(input?.videoConfig),
     currentPrompt: input?.currentPrompt || "",
@@ -3348,11 +3234,12 @@ function getCurrentVideoApiKey() {
 }
 
 function getShotReferenceImages(shot) {
-  return [shot.imageDataUrl, ...(shot.references || []).filter((r) => r.mediaType === "image").map((r) => r.url)].filter(Boolean);
+  return (shot.references || []).filter((r) => r.mediaType === "image").map((r) => r.url).filter(Boolean);
 }
 
 function getShotCoverImage(shot) {
-  return shot.imageDataUrl || "";
+  const firstImage = (shot.references || []).find((r) => r.mediaType === "image" && r.url);
+  return firstImage?.url || "";
 }
 
 function getShotById(shotId) {

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>镜头 Prompt 工作台</title>
+  <title>视频工作台</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
@@ -151,14 +151,6 @@
           <div class="shot-order"></div>
           <div class="shot-main">
             <section class="image-panel">
-              <div class="single-media-editor">
-                <div class="image-frame">
-                  <img class="shot-image" alt="镜头图预览">
-                  <input class="shot-image-input hidden-file-input" type="file" accept="image/*">
-                  <div class="image-empty">未上传镜头图</div>
-                  <button class="image-delete-button" type="button" aria-label="删除图片">×</button>
-                </div>
-              </div>
               <div class="references-editor">
                 <div class="references-header">
                   <h3>全能参考</h3>
@@ -167,7 +159,7 @@
                 <div class="references-list"></div>
                 <div class="references-upload-zone">
                   <input class="references-upload-input hidden-file-input" type="file" accept="image/*,video/*,audio/*" multiple>
-                  <span class="drag-tip">拖拽或点击添加参考素材（图片/视频/音频）</span>
+                  <span class="drag-tip">拖拽或点击上传素材（图片可设为首帧/尾帧，也支持视频/音频）</span>
                 </div>
               </div>
               <label class="field compact">
@@ -219,7 +211,7 @@
                 <h2>视频生成</h2>
                 <span class="meta video-task-label">尚未提交任务</span>
               </div>
-              <p class="video-panel-hint">默认使用当前 Prompt 和镜头图（作为首帧），全能参考中的素材也会一起提交。</p>
+              <p class="video-panel-hint">默认使用当前 Prompt，设为"首帧"或"尾帧"的图片用于图生视频，其余素材作为参考一起提交。</p>
               <div class="video-settings-grid">
                 <label class="field compact">
                   <span>比例</span>
