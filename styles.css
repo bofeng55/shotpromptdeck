@@ -1006,6 +1006,11 @@ button:disabled {
 .references-header h3 {
   margin: 0;
   white-space: nowrap;
+  font-size: 1rem;
+}
+
+.references-header .references-capacity {
+  white-space: nowrap;
 }
 
 .references-list {
@@ -1044,6 +1049,47 @@ button:disabled {
   font-size: 0.8rem;
   color: var(--muted);
   flex-shrink: 0;
+}
+
+.reference-video-preview {
+  border: 1px solid var(--line);
+}
+
+.reference-audio-preview {
+  width: 56px;
+  height: 56px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  cursor: pointer;
+  border: 1px solid var(--line);
+}
+
+.reference-audio-preview.is-playing {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.reference-audio-icon {
+  font-size: 1.2rem;
+  color: var(--muted);
+}
+
+.reference-audio-preview.is-playing .reference-audio-icon {
+  color: var(--accent);
+}
+
+.reference-audio-player {
+  width: 100%;
+  margin-top: 4px;
+}
+
+.reference-audio-player:not([controls]) {
+  display: none;
 }
 
 .reference-item-content {

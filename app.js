@@ -1318,10 +1318,10 @@ function renderReferences(container, shot) {
     let previewHtml = "";
     if (ref.mediaType === "image" && ref.url) {
       previewHtml = `<img class="reference-item-preview" src="${escapeHtml(ref.url)}" alt="${escapeHtml(ref.title || `参考图 ${index + 1}`)}">`;
-    } else if (ref.mediaType === "video") {
-      previewHtml = '<div class="reference-item-icon">视频</div>';
-    } else if (ref.mediaType === "audio") {
-      previewHtml = '<div class="reference-item-icon">音频</div>';
+    } else if (ref.mediaType === "video" && ref.url) {
+      previewHtml = `<video class="reference-item-preview reference-video-preview" src="${escapeHtml(ref.url)}" preload="metadata"></video>`;
+    } else if (ref.mediaType === "audio" && ref.url) {
+      previewHtml = `<div class="reference-audio-preview"><span class="reference-audio-icon">♪</span><audio class="reference-audio-player" src="${escapeHtml(ref.url)}" preload="metadata"></audio></div>`;
     }
 
     const roleSelectHtml = ref.mediaType === "image" ? `
@@ -1369,6 +1369,45 @@ function renderReferences(container, shot) {
           openLightbox(ref.url, ref.title || shot.title);
         });
         preview.style.cursor = "pointer";
+      }
+    }
+
+    if (ref.mediaType === "video" && ref.url) {
+      const videoPreview = item.querySelector(".reference-video-preview");
+      if (videoPreview) {
+        videoPreview.style.cursor = "pointer";
+        videoPreview.addEventListener("click", () => {
+          if (videoPreview.paused) {
+            videoPreview.controls = true;
+            videoPreview.play();
+          } else {
+            videoPreview.pause();
+            videoPreview.controls = false;
+          }
+        });
+      }
+    }
+
+    if (ref.mediaType === "audio" && ref.url) {
+      const audioContainer = item.querySelector(".reference-audio-preview");
+      const audioPlayer = item.querySelector(".reference-audio-player");
+      if (audioContainer && audioPlayer) {
+        audioContainer.style.cursor = "pointer";
+        audioContainer.addEventListener("click", () => {
+          if (audioPlayer.paused) {
+            audioPlayer.controls = true;
+            audioContainer.classList.add("is-playing");
+            audioPlayer.play();
+          } else {
+            audioPlayer.pause();
+            audioPlayer.controls = false;
+            audioContainer.classList.remove("is-playing");
+          }
+        });
+        audioPlayer.addEventListener("ended", () => {
+          audioPlayer.controls = false;
+          audioContainer.classList.remove("is-playing");
+        });
       }
     }
 
