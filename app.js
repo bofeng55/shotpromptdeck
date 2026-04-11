@@ -376,7 +376,6 @@ function render() {
     const order = fragment.querySelector(".shot-order");
     const titleInput = fragment.querySelector(".shot-title");
     const directorNotesInput = fragment.querySelector(".director-notes");
-    const dialogueInput = fragment.querySelector(".shot-dialogue");
     const imageInput = fragment.querySelector(".shot-image-input");
     const promptInput = fragment.querySelector(".shot-prompt");
     const feedbackInput = fragment.querySelector(".feedback-input");
@@ -401,6 +400,8 @@ function render() {
     const videoLastFrame = fragment.querySelector(".video-last-frame");
     const videoResultEmpty = fragment.querySelector(".video-result-empty");
     const videoResultMeta = fragment.querySelector(".video-result-meta");
+    const videoHistoryList = fragment.querySelector(".video-history-list");
+    const videoHistoryCount = fragment.querySelector(".video-history-count");
     const favoriteButton = fragment.querySelector(".favorite-button");
     const duplicateFavoriteButton = fragment.querySelector(".duplicate-favorite-button");
 
@@ -412,8 +413,6 @@ function render() {
     titleInput.placeholder = "例如：s01c001";
     directorNotesInput.value = shot.directorNotes || "";
     directorNotesInput.placeholder = "例如：这一镜主打人物迟疑感，情绪要收着，眼神先躲再回看，节奏慢半拍";
-    dialogueInput.value = shot.dialogue || "";
-    dialogueInput.placeholder = "例如：你终于来了。今天这一步，我已经等很久了。";
     promptInput.value = shot.currentPrompt;
     videoRatioInput.value = shot.videoConfig.ratio;
     videoDurationInput.value = String(shot.videoConfig.duration);
@@ -431,6 +430,8 @@ function render() {
       videoResultEmpty,
       videoResultMeta,
     });
+    renderVideoHistory(videoHistoryList, shot);
+    videoHistoryCount.textContent = `${(shot.videoHistory || []).length} 条归档`;
 
     imageEmpty.innerHTML = '<span class="drag-tip">拖拽图片到这里，或点击上传</span>';
 
@@ -462,12 +463,6 @@ function render() {
       shot.directorNotes = event.target.value;
       shot.updatedAt = new Date().toISOString();
       queuePersistState("导演讲戏已更新。");
-    });
-
-    dialogueInput.addEventListener("input", async (event) => {
-      shot.dialogue = event.target.value;
-      shot.updatedAt = new Date().toISOString();
-      queuePersistState("镜头台词已更新。");
     });
 
     imageInput.addEventListener("change", async (event) => {
@@ -788,17 +783,11 @@ function renderFavoriteModal(favorite) {
         </section>
         <section class="prompt-panel favorite-detail-panel">
           <div class="favorite-block">
-            <h3>镜头台词</h3>
-            <p class="favorite-notes">${escapeHtml(favorite.dialogue || "暂无镜头台词")}</p>
-          </div>
-        </section>
-        <section class="prompt-panel favorite-detail-panel">
-          <div class="favorite-block">
             <h3>当前 Prompt</h3>
             <p class="favorite-prompt">${escapeHtml(favorite.currentPrompt || "暂无 Prompt")}</p>
           </div>
         </section>
-        <section class="chat-panel favorite-detail-panel">
+        <section class="prompt-panel favorite-detail-panel">
           <div class="favorite-block">
             <button class="favorite-archive-toggle" type="button" aria-expanded="false">展开 Prompt归档</button>
             <div class="favorite-history is-collapsed"></div>
@@ -909,13 +898,13 @@ function createFavoriteSnapshot(shot, options = {}) {
     shotId: existing?.shotId || shot.id,
     title: shot.title,
     directorNotes: shot.directorNotes,
-    dialogue: shot.dialogue || "",
     imageDataUrl: getShotCoverImage(shot),
     references: structuredClone(shot.references || []),
     videoConfig: structuredClone(shot.videoConfig || createDefaultVideoConfig()),
     currentPrompt: shot.currentPrompt,
     promptHistory: structuredClone(shot.promptHistory || []),
     chatHistory: structuredClone(shot.chatHistory || []),
+    videoHistory: structuredClone(shot.videoHistory || []),
     tags: structuredClone(existing?.tags || []),
     favoritedAt: new Date().toISOString(),
     updatedAt: shot.updatedAt || new Date().toISOString(),
@@ -932,7 +921,6 @@ function getFilteredFavorites() {
     const haystack = [
       favorite.title,
       favorite.directorNotes,
-      favorite.dialogue,
       favorite.currentPrompt,
       historyText,
       tagsText,
@@ -957,7 +945,6 @@ function createWorkspaceShotFromFavorite(favorite) {
   const shot = createShot();
   shot.title = favorite.title || "";
   shot.directorNotes = favorite.directorNotes || "";
-  shot.dialogue = favorite.dialogue || "";
   shot.imageDataUrl = favorite.imageDataUrl || "";
   shot.linkedFavoriteId = favorite.id;
   shot.references = structuredClone(favorite.references || []);
@@ -965,6 +952,7 @@ function createWorkspaceShotFromFavorite(favorite) {
   shot.currentPrompt = favorite.currentPrompt || "";
   shot.promptHistory = structuredClone(favorite.promptHistory || []);
   shot.chatHistory = structuredClone(favorite.chatHistory || []);
+  shot.videoHistory = structuredClone(favorite.videoHistory || []);
   shot.updatedAt = new Date().toISOString();
   return shot;
 }
@@ -1850,6 +1838,9 @@ async function refreshVideoTaskStatus(shotId, options = {}) {
 
     if (isVideoTaskFinished(nextStatus)) {
       stopVideoPolling(shotId);
+      if (nextStatus === "succeeded") {
+        archiveVideoResult(shot);
+      }
     }
 
     await persistState(result.message || getVideoStatusMessage(nextStatus));
@@ -1923,7 +1914,6 @@ function buildGenerationInstruction(shot) {
   const currentPrompt = shot.currentPrompt.trim();
   const direction = state.settings.globalDirection.trim();
   const directorNotes = (shot.directorNotes || "").trim();
-  const dialogue = (shot.dialogue || "").trim();
   const title = shot.title.trim() || "未命名镜头";
   const refCount = (shot.references || []).length;
 
@@ -1934,10 +1924,8 @@ function buildGenerationInstruction(shot) {
     "1. 直接输出最终 Prompt，不要解释",
     "2. 包含运镜、主体、动作、镜头语言、氛围",
     "3. 风格要适合图生视频模型，文字具体、可执行、画面感强",
-    dialogue ? "4. 如果用户提供了台词，必须在最终 Prompt 中保留这段台词，不要改写台词内容。" : "",
     `镜头标题：${title}`,
     directorNotes ? `导演讲戏：${directorNotes}` : "",
-    dialogue ? `镜头台词：${dialogue}` : "",
     direction ? `全局风格备注：${direction}` : "",
     refCount > 0 ? `附带了 ${refCount} 个参考素材。` : "",
     currentPrompt ? `用户已有草稿，请在保留有用意图的前提下重写提升：${currentPrompt}` : "用户暂未提供草稿，请直接从图片生成。",
@@ -1948,7 +1936,6 @@ function buildRevisionInstruction(shot, feedback) {
   const title = shot.title.trim() || "未命名镜头";
   const direction = state.settings.globalDirection.trim();
   const directorNotes = (shot.directorNotes || "").trim();
-  const dialogue = (shot.dialogue || "").trim();
   const currentPrompt = shot.currentPrompt.trim();
   const refCount = (shot.references || []).length;
 
@@ -1960,10 +1947,8 @@ function buildRevisionInstruction(shot, feedback) {
     "2. 必须把“当前 Prompt”视为唯一修改基线，不要回退到更早版本，也不要优先参考你之前生成过的 Prompt。",
     "3. 即使当前 Prompt 是用户手写的，也要在保留其核心意图的前提下精准修改。",
     "4. 如果输入图片存在，可继续结合图片修正画面细节。",
-    dialogue ? "5. 如果该镜头提供了台词，修改时必须保留这段台词，不要删改台词内容。" : "",
     `镜头标题：${title}`,
     directorNotes ? `导演讲戏：${directorNotes}` : "",
-    dialogue ? `镜头台词：${dialogue}` : "",
     direction ? `全局风格备注：${direction}` : "",
     refCount > 0 ? `附带了 ${refCount} 个参考素材。` : "",
     `当前 Prompt：${currentPrompt || "暂无"}`,
@@ -2302,7 +2287,6 @@ function createShot() {
     linkedFavoriteId: "",
     title: "",
     directorNotes: "",
-    dialogue: "",
     imageDataUrl: "",
     references: [],
     videoConfig: createDefaultVideoConfig(),
@@ -2310,6 +2294,7 @@ function createShot() {
     currentPrompt: "",
     promptHistory: [],
     chatHistory: [],
+    videoHistory: [],
     createdAt: now,
     updatedAt: now,
   };
@@ -2565,6 +2550,84 @@ function renderVideoResult({ shot, videoTaskLabel, generatedVideo, videoLastFram
   videoResultMeta.innerHTML = metaLines.join("<br>");
 }
 
+function renderVideoHistory(container, shot) {
+  container.innerHTML = "";
+  const history = shot.videoHistory || [];
+
+  if (!history.length) {
+    container.innerHTML = '<div class="empty-state">视频生成成功后会自动归档到这里。</div>';
+    return;
+  }
+
+  [...history].reverse().forEach((entry) => {
+    const item = document.createElement("div");
+    item.className = "video-history-item";
+
+    const statusText = getVideoStatusText(entry.status || "succeeded");
+    const hasVideo = Boolean(entry.videoUrl);
+
+    item.innerHTML = `
+      <header>
+        <strong>${statusText} · ${escapeHtml(formatTime(entry.createdAt))}</strong>
+        <div class="video-history-actions">
+          <button class="ghost-button archive-rate-button" type="button">${renderArchiveStars(entry.rating || 0)}</button>
+          <button class="ghost-button delete-video-history-button danger" type="button">删除</button>
+        </div>
+      </header>
+      ${entry.requestSummary ? `<p class="video-history-meta">${escapeHtml(entry.requestSummary)}</p>` : ""}
+      ${hasVideo ? `<video src="${escapeHtml(entry.videoUrl)}" controls playsinline></video>` : ""}
+      ${hasVideo ? `<p class="video-history-meta"><a href="${escapeHtml(entry.videoUrl)}" target="_blank" rel="noopener noreferrer">打开视频链接</a></p>` : ""}
+    `;
+
+    item.querySelector(".archive-rate-button").addEventListener("click", async () => {
+      entry.rating = getNextArchiveRating(entry.rating || 0);
+      await persistState("视频归档星标已更新。");
+      render();
+    });
+
+    item.querySelector(".delete-video-history-button").addEventListener("click", async () => {
+      shot.videoHistory = (shot.videoHistory || []).filter((e) => e.id !== entry.id);
+      shot.updatedAt = new Date().toISOString();
+      await persistState("视频归档已删除。");
+      render();
+    });
+
+    container.append(item);
+  });
+}
+
+function createVideoHistoryEntry(videoTask) {
+  return {
+    id: crypto.randomUUID(),
+    taskId: videoTask.id || "",
+    status: videoTask.status || "succeeded",
+    videoUrl: videoTask.videoUrl || "",
+    coverImageUrl: videoTask.coverImageUrl || "",
+    lastFrameUrl: videoTask.lastFrameUrl || "",
+    requestSummary: videoTask.requestSummary || "",
+    rating: 0,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function archiveVideoResult(shot) {
+  const task = shot.videoTask;
+  if (!task?.videoUrl) {
+    return;
+  }
+
+  const alreadyArchived = (shot.videoHistory || []).some((e) => e.taskId === task.id);
+  if (alreadyArchived) {
+    return;
+  }
+
+  if (!Array.isArray(shot.videoHistory)) {
+    shot.videoHistory = [];
+  }
+
+  shot.videoHistory.push(createVideoHistoryEntry(task));
+}
+
 function isProbablyImageFile(file) {
   if (!file) {
     return false;
@@ -2580,7 +2643,6 @@ function isProbablyImageFile(file) {
 function isShotEmpty(shot) {
   return !shot.title
     && !shot.directorNotes
-    && !shot.dialogue
     && !shot.imageDataUrl
     && !(shot.references || []).length
     && !shot.currentPrompt
@@ -2732,7 +2794,6 @@ function normalizeShot(input) {
     linkedFavoriteId: input?.linkedFavoriteId || "",
     title: input?.title || "",
     directorNotes: input?.directorNotes || "",
-    dialogue: input?.dialogue || "",
     imageDataUrl,
     references,
     videoConfig: normalizeShotVideoConfig(input?.videoConfig),
@@ -2740,6 +2801,7 @@ function normalizeShot(input) {
     currentPrompt: input?.currentPrompt || "",
     promptHistory: Array.isArray(input?.promptHistory) ? input.promptHistory.map(normalizeHistoryEntry) : [],
     chatHistory: Array.isArray(input?.chatHistory) ? input.chatHistory : [],
+    videoHistory: Array.isArray(input?.videoHistory) ? input.videoHistory : [],
     createdAt: input?.createdAt || now,
     updatedAt: input?.updatedAt || input?.createdAt || now,
   };
@@ -2764,7 +2826,6 @@ function normalizeFavorite(input) {
     shotId: input?.shotId || "",
     title: input?.title || "",
     directorNotes: input?.directorNotes || "",
-    dialogue: input?.dialogue || "",
     imageDataUrl: input?.imageDataUrl || "",
     references,
     videoConfig: normalizeShotVideoConfig(input?.videoConfig),
@@ -2772,6 +2833,7 @@ function normalizeFavorite(input) {
     promptHistory: Array.isArray(input?.promptHistory) ? input.promptHistory.map(normalizeHistoryEntry) : [],
     tags: normalizeFavoriteTags(input?.tags),
     chatHistory: Array.isArray(input?.chatHistory) ? input.chatHistory : [],
+    videoHistory: Array.isArray(input?.videoHistory) ? input.videoHistory : [],
     favoritedAt: input?.favoritedAt || now,
     updatedAt: input?.updatedAt || now,
   };

@@ -869,8 +869,7 @@ button:disabled {
 }
 
 .image-panel,
-.prompt-panel,
-.chat-panel {
+.prompt-panel {
   background: var(--surface-2);
   border: 1px solid var(--line);
   border-radius: 20px;
@@ -1004,16 +1003,16 @@ button:disabled {
   flex-shrink: 0;
 }
 
-.reference-item-body {
+.reference-item-content {
   flex: 1;
   min-width: 0;
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  align-items: center;
+  gap: 10px;
 }
 
-.reference-item-body select,
-.reference-item-body input {
+.reference-item-content select,
+.reference-item-content input {
   font-size: 0.88rem;
   padding: 4px 8px;
   border: 1px solid var(--line);
@@ -1026,9 +1025,10 @@ button:disabled {
   color: var(--muted);
 }
 
-.reference-item-delete {
+.reference-delete-button {
   padding: 4px 8px !important;
   font-size: 0.82rem !important;
+  flex-shrink: 0;
 }
 
 .references-upload-zone {
@@ -1375,6 +1375,63 @@ button:disabled {
   background: rgba(0, 0, 0, 0.02);
 }
 
+.chat-section {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.video-history-panel {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.video-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 360px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.video-history-item {
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.video-history-item header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.video-history-item .video-history-meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+.video-history-item video {
+  width: 100%;
+  border-radius: 10px;
+  margin-top: 8px;
+  background: #000;
+}
+
+.video-history-item .video-history-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
 .empty-state {
   padding: 18px;
   border-radius: 14px;
@@ -1542,7 +1599,6 @@ button:disabled {
 
   .image-panel,
   .prompt-panel,
-  .chat-panel,
   .video-panel {
     padding: 14px;
   }

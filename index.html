@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./styles.css?v=20260411a">
+  <link rel="stylesheet" href="./styles.css?v=20260412a">
 </head>
 <body>
   <div class="shell">
@@ -178,10 +178,6 @@
                 <span>导演讲戏</span>
                 <textarea class="director-notes" rows="5" placeholder="例如：这一镜主打人物迟疑感，情绪要收着，眼神先躲再回看，节奏慢半拍"></textarea>
               </label>
-              <label class="field compact">
-                <span>镜头台词</span>
-                <textarea class="shot-dialogue" rows="4" placeholder="例如：你终于来了。今天这一步，我已经等很久了。"></textarea>
-              </label>
               <div class="card-actions stack">
                 <button class="secondary-button generate-button" type="button">AI 生成 Prompt</button>
               </div>
@@ -206,6 +202,21 @@
                   <span class="meta history-count"></span>
                 </div>
                 <div class="history-list"></div>
+              </div>
+              <div class="chat-section">
+                <div class="panel-header">
+                  <h3>修改对话</h3>
+                  <span class="meta">基于当前 Prompt 连续迭代</span>
+                </div>
+                <div class="chat-log"></div>
+                <label class="field">
+                  <span>你的修改要求</span>
+                  <textarea class="feedback-input" rows="4" placeholder="例如：改为手持运镜；镜头更有冲击力；角色表演更克制；补充运镜、光线、动作"></textarea>
+                </label>
+                <div class="card-actions">
+                  <button class="secondary-button revise-button" type="button">让 AI 修改 Prompt</button>
+                  <button class="ghost-button clear-chat-button" type="button">清空本镜头对话</button>
+                </div>
               </div>
             </section>
 
@@ -234,10 +245,14 @@
                     <option value="4">4 秒</option>
                     <option value="5" selected>5 秒</option>
                     <option value="6">6 秒</option>
+                    <option value="7">7 秒</option>
                     <option value="8">8 秒</option>
+                    <option value="9">9 秒</option>
                     <option value="10">10 秒</option>
                     <option value="11">11 秒</option>
                     <option value="12">12 秒</option>
+                    <option value="13">13 秒</option>
+                    <option value="14">14 秒</option>
                     <option value="15">15 秒</option>
                   </select>
                 </label>
@@ -283,21 +298,12 @@
                 <img class="video-last-frame" alt="生成视频尾帧预览" hidden>
                 <div class="video-result-meta"></div>
               </div>
-            </section>
-
-            <section class="chat-panel">
-              <div class="panel-header">
-                <h2>修改对话</h2>
-                <span class="meta">基于当前 Prompt 连续迭代</span>
-              </div>
-              <div class="chat-log"></div>
-              <label class="field">
-                <span>你的修改要求</span>
-                <textarea class="feedback-input" rows="5" placeholder="例如：改为手持运镜；镜头更有冲击力；角色表演更克制；补充运镜、光线、动作"></textarea>
-              </label>
-              <div class="card-actions">
-                <button class="secondary-button revise-button" type="button">让 AI 修改 Prompt</button>
-                <button class="ghost-button clear-chat-button" type="button">清空本镜头对话</button>
+              <div class="video-history-panel">
+                <div class="panel-header">
+                  <h3>视频归档</h3>
+                  <span class="meta video-history-count"></span>
+                </div>
+                <div class="video-history-list"></div>
               </div>
             </section>
           </div>
@@ -360,6 +366,6 @@
     </div>
   </div>
 
-  <script src="./app.js?v=20260411a"></script>
+  <script src="./app.js?v=20260412a"></script>
 </body>
 </html>
