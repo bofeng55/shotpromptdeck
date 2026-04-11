@@ -8,7 +8,7 @@ const IMAGE_OUTPUT_QUALITY = 0.76;
 const VIDEO_POLL_INTERVAL_MS = 10000;
 const VIDEO_BASE_URL = "/api/video-tasks";
 const DEFAULT_VIDEO_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
-const DEFAULT_VIDEO_MODEL = "doubao-seedance-1-0-pro-250528";
+const DEFAULT_VIDEO_MODEL = "doubao-seedance-2-0-pro-250615";
 const SYSTEM_PROMPT = "你是专业的视频生成提示词导演，只输出最终可直接使用的中文视频生成 Prompt，不要解释。";
 const PROVIDER_CONFIGS = {
   gemini: {
