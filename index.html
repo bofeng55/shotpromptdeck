@@ -151,7 +151,6 @@
           <div class="shot-order"></div>
           <div class="shot-main">
             <section class="image-panel">
-              <div class="media-mode-badge"></div>
               <div class="single-media-editor">
                 <div class="image-frame">
                   <img class="shot-image" alt="镜头图预览">
@@ -160,14 +159,16 @@
                   <button class="image-delete-button" type="button" aria-label="删除图片">×</button>
                 </div>
               </div>
-              <div class="group-media-editor" hidden>
-                <div class="group-upload-frame image-frame">
-                  <input class="group-images-input" type="file" accept="image/*" multiple>
-                  <div class="image-empty">
-                    <span class="drag-tip">拖拽单张或多张图片到这里，或点击上传</span>
-                  </div>
+              <div class="references-editor">
+                <div class="references-header">
+                  <h3>全能参考</h3>
+                  <span class="meta references-capacity"></span>
                 </div>
-                <div class="reference-frames-list"></div>
+                <div class="references-list"></div>
+                <div class="references-upload-zone">
+                  <input class="references-upload-input hidden-file-input" type="file" accept="image/*,video/*,audio/*" multiple>
+                  <span class="drag-tip">拖拽或点击添加参考素材（图片/视频/音频）</span>
+                </div>
               </div>
               <label class="field compact">
                 <span>镜头标题</span>
@@ -213,15 +214,8 @@
                 <h2>视频生成</h2>
                 <span class="meta video-task-label">尚未提交任务</span>
               </div>
-              <p class="video-panel-hint">默认直接使用当前 Prompt。单镜头会带首帧图；镜头组当前会取第一张图作为首帧、最后一张图作为尾帧。</p>
+              <p class="video-panel-hint">默认使用当前 Prompt 和镜头图（作为首帧），全能参考中的素材也会一起提交。</p>
               <div class="video-settings-grid">
-                <label class="field compact video-group-mode-field" hidden>
-                  <span>镜头组输入模式</span>
-                  <select class="video-group-mode">
-                    <option value="reference">多参考图</option>
-                    <option value="first_last">首尾帧</option>
-                  </select>
-                </label>
                 <label class="field compact">
                   <span>比例</span>
                   <select class="video-ratio">
@@ -237,11 +231,14 @@
                 <label class="field compact">
                   <span>时长</span>
                   <select class="video-duration">
-                    <option value="3">3 秒</option>
                     <option value="4">4 秒</option>
                     <option value="5" selected>5 秒</option>
                     <option value="6">6 秒</option>
                     <option value="8">8 秒</option>
+                    <option value="10">10 秒</option>
+                    <option value="11">11 秒</option>
+                    <option value="12">12 秒</option>
+                    <option value="15">15 秒</option>
                   </select>
                 </label>
                 <label class="field compact">
@@ -250,7 +247,6 @@
                     <option value="">模型默认</option>
                     <option value="480p">480p</option>
                     <option value="720p">720p</option>
-                    <option value="1080p">1080p</option>
                   </select>
                 </label>
                 <label class="field compact">
@@ -259,6 +255,14 @@
                 </label>
               </div>
               <div class="video-checks">
+                <label class="checkbox-field">
+                  <input class="video-generate-audio" type="checkbox" checked>
+                  <span>生成有声视频</span>
+                </label>
+                <label class="checkbox-field">
+                  <input class="video-camera-fixed" type="checkbox">
+                  <span>固定镜头</span>
+                </label>
                 <label class="checkbox-field">
                   <input class="video-watermark" type="checkbox">
                   <span>添加水印</span>
@@ -305,9 +309,7 @@
             </div>
             <div class="shot-footer-group insert-actions-grid">
               <button class="ghost-button insert-above-button" type="button">上插镜头</button>
-              <button class="ghost-button insert-group-above-button" type="button">上插镜头组</button>
               <button class="ghost-button insert-below-button" type="button">下插镜头</button>
-              <button class="ghost-button insert-group-below-button" type="button">下插镜头组</button>
             </div>
             <div class="shot-footer-group shot-footer-side shot-footer-danger">
               <button class="ghost-button delete-button danger" type="button">删除此镜头</button>

@@ -58,11 +58,11 @@ module.exports = async function handler(req, res) {
       status: normalizeStatus(payload?.status || "queued"),
       origin: "volcengine-ark",
       requestSummary: [
-        input?.groupInputMode === "reference" ? "镜头组多参考图" : "",
-        input?.groupInputMode === "first_last" ? "镜头组首尾帧" : "",
         requestBody.ratio ? `比例 ${requestBody.ratio}` : "",
         requestBody.duration ? `时长 ${requestBody.duration}s` : "",
         requestBody.resolution ? `分辨率 ${requestBody.resolution}` : "",
+        requestBody.generate_audio === false ? "无声" : "有声",
+        requestBody.camera_fixed ? "固定镜头" : "",
       ].filter(Boolean).join(" · "),
     });
   } catch (error) {

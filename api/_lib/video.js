@@ -130,6 +130,8 @@ function buildCreateBody(input) {
     duration: Number.isFinite(Number(input?.duration)) ? Number(input.duration) : undefined,
     resolution: String(input?.resolution || "").trim() || undefined,
     seed: Number.isFinite(Number(input?.seed)) ? Number(input.seed) : undefined,
+    generate_audio: input?.generate_audio !== false,
+    camera_fixed: Boolean(input?.camera_fixed),
     watermark: Boolean(input?.watermark),
     return_last_frame: Boolean(input?.return_last_frame),
   };

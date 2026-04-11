@@ -370,20 +370,13 @@ function render() {
   state.shots.forEach((shot, index) => {
     const fragment = elements.shotTemplate.content.cloneNode(true);
     const card = fragment.querySelector(".shot-card");
-    const mediaModeBadge = fragment.querySelector(".media-mode-badge");
-    const singleMediaEditor = fragment.querySelector(".single-media-editor");
-    const groupMediaEditor = fragment.querySelector(".group-media-editor");
-    const groupUploadFrame = fragment.querySelector(".group-upload-frame");
     const imageFrame = fragment.querySelector(".image-frame");
     const image = fragment.querySelector(".shot-image");
     const imageEmpty = fragment.querySelector(".image-empty");
-    const groupImagesInput = fragment.querySelector(".group-images-input");
-    const referenceFramesList = fragment.querySelector(".reference-frames-list");
     const order = fragment.querySelector(".shot-order");
     const titleInput = fragment.querySelector(".shot-title");
     const directorNotesInput = fragment.querySelector(".director-notes");
     const dialogueInput = fragment.querySelector(".shot-dialogue");
-    const dialogueField = dialogueInput.closest(".field");
     const imageInput = fragment.querySelector(".shot-image-input");
     const promptInput = fragment.querySelector(".shot-prompt");
     const feedbackInput = fragment.querySelector(".feedback-input");
@@ -392,12 +385,16 @@ function render() {
     const currentVersionLabel = fragment.querySelector(".current-version-label");
     const historyCount = fragment.querySelector(".history-count");
     const videoTaskLabel = fragment.querySelector(".video-task-label");
-    const videoGroupModeField = fragment.querySelector(".video-group-mode-field");
-    const videoGroupModeInput = fragment.querySelector(".video-group-mode");
+    const referencesList = fragment.querySelector(".references-list");
+    const referencesUploadZone = fragment.querySelector(".references-upload-zone");
+    const referencesUploadInput = fragment.querySelector(".references-upload-input");
+    const referencesCapacity = fragment.querySelector(".references-capacity");
     const videoRatioInput = fragment.querySelector(".video-ratio");
     const videoDurationInput = fragment.querySelector(".video-duration");
     const videoResolutionInput = fragment.querySelector(".video-resolution");
     const videoSeedInput = fragment.querySelector(".video-seed");
+    const videoGenerateAudioInput = fragment.querySelector(".video-generate-audio");
+    const videoCameraFixedInput = fragment.querySelector(".video-camera-fixed");
     const videoWatermarkInput = fragment.querySelector(".video-watermark");
     const videoReturnLastFrameInput = fragment.querySelector(".video-return-last-frame");
     const generatedVideo = fragment.querySelector(".generated-video");
@@ -407,35 +404,25 @@ function render() {
     const favoriteButton = fragment.querySelector(".favorite-button");
     const duplicateFavoriteButton = fragment.querySelector(".duplicate-favorite-button");
 
-    const isGroupShot = shot.type === "group";
-    order.textContent = `${isGroupShot ? "Group" : "Shot"} ${String(index + 1).padStart(2, "0")}`;
+    order.textContent = `Shot ${String(index + 1).padStart(2, "0")}`;
     order.title = "拖拽以调整镜头顺序";
     card.dataset.shotId = shot.id;
-    card.classList.toggle("is-group-shot", isGroupShot);
     bindShotSortEvents(card, order, shot.id);
     titleInput.value = shot.title;
-    titleInput.placeholder = isGroupShot ? "例如：s02c003-s02c005" : "例如：s01c001";
+    titleInput.placeholder = "例如：s01c001";
     directorNotesInput.value = shot.directorNotes || "";
-    directorNotesInput.placeholder = isGroupShot
-      ? "例如：这一组镜头从人物走入空间开始，先交代环境，再切到动作细节，最后回到人物情绪，整体节奏由慢到快，镜头之间要连贯"
-      : "例如：这一镜主打人物迟疑感，情绪要收着，眼神先躲再回看，节奏慢半拍";
+    directorNotesInput.placeholder = "例如：这一镜主打人物迟疑感，情绪要收着，眼神先躲再回看，节奏慢半拍";
     dialogueInput.value = shot.dialogue || "";
-    dialogueInput.placeholder = isGroupShot
-      ? "例如：A：你终于来了。 B：我没迟到，只是你等得太久了。"
-      : "例如：你终于来了。今天这一步，我已经等很久了。";
+    dialogueInput.placeholder = "例如：你终于来了。今天这一步，我已经等很久了。";
     promptInput.value = shot.currentPrompt;
-    videoGroupModeField.hidden = !isGroupShot;
-    videoGroupModeInput.value = shot.videoConfig.groupInputMode || "reference";
     videoRatioInput.value = shot.videoConfig.ratio;
     videoDurationInput.value = String(shot.videoConfig.duration);
     videoResolutionInput.value = shot.videoConfig.resolution;
     videoSeedInput.value = shot.videoConfig.seed ?? "";
+    videoGenerateAudioInput.checked = shot.videoConfig.generateAudio !== false;
+    videoCameraFixedInput.checked = Boolean(shot.videoConfig.cameraFixed);
     videoWatermarkInput.checked = Boolean(shot.videoConfig.watermark);
     videoReturnLastFrameInput.checked = Boolean(shot.videoConfig.returnLastFrame);
-    mediaModeBadge.textContent = isGroupShot ? "镜头组 / 多图参考" : "单镜头 / 图生视频";
-    singleMediaEditor.hidden = isGroupShot;
-    groupMediaEditor.hidden = !isGroupShot;
-    dialogueField.hidden = isGroupShot;
     renderVideoResult({
       shot,
       videoTaskLabel,
@@ -445,36 +432,19 @@ function render() {
       videoResultMeta,
     });
 
-    if (isGroupShot) {
-      renderReferenceFrames(referenceFramesList, shot);
-      bindGroupUploadZone(groupUploadFrame, groupImagesInput, shot);
+    imageEmpty.innerHTML = '<span class="drag-tip">拖拽图片到这里，或点击上传</span>';
 
-      groupImagesInput.addEventListener("change", async (event) => {
-        const files = Array.from(event.target.files || []);
-        if (!files.length) {
-          return;
-        }
-
-        try {
-          await addFilesToGroupShot(shot, files);
-          render();
-        } catch (error) {
-          reportRuntimeError(error, "镜头组图片上传失败。");
-        } finally {
-          event.target.value = "";
-        }
-      });
-    } else {
-      imageEmpty.innerHTML = '<span class="drag-tip">拖拽图片到这里，或点击上传</span>';
-
-      if (shot.imageDataUrl) {
-        imageFrame.classList.add("has-image");
-        image.src = shot.imageDataUrl;
-        image.alt = shot.title ? `${shot.title} 放大预览` : "镜头图放大预览";
-      }
-
-      bindImageDropZone(imageFrame, imageInput, shot);
+    if (shot.imageDataUrl) {
+      imageFrame.classList.add("has-image");
+      image.src = shot.imageDataUrl;
+      image.alt = shot.title ? `${shot.title} 放大预览` : "镜头图放大预览";
     }
+
+    bindImageDropZone(imageFrame, imageInput, shot);
+
+    renderReferences(referencesList, shot);
+    updateReferencesCapacity(referencesCapacity, shot);
+    bindReferencesUploadZone(referencesUploadZone, referencesUploadInput, shot);
 
     currentVersionLabel.textContent = shot.updatedAt ? `最近更新：${formatTime(shot.updatedAt)}` : "尚未保存";
     historyCount.textContent = `${shot.promptHistory.length} 条归档`;
@@ -528,12 +498,6 @@ function render() {
       queuePersistState("视频比例已更新。");
     });
 
-    videoGroupModeInput.addEventListener("change", (event) => {
-      shot.videoConfig.groupInputMode = event.target.value === "first_last" ? "first_last" : "reference";
-      shot.updatedAt = new Date().toISOString();
-      queuePersistState("镜头组视频输入模式已更新。");
-    });
-
     videoDurationInput.addEventListener("change", (event) => {
       shot.videoConfig.duration = clampVideoDuration(event.target.value);
       shot.updatedAt = new Date().toISOString();
@@ -550,6 +514,18 @@ function render() {
       shot.videoConfig.seed = normalizeVideoSeed(event.target.value);
       shot.updatedAt = new Date().toISOString();
       queuePersistState("视频随机种子已更新。");
+    });
+
+    videoGenerateAudioInput.addEventListener("change", (event) => {
+      shot.videoConfig.generateAudio = Boolean(event.target.checked);
+      shot.updatedAt = new Date().toISOString();
+      queuePersistState("有声视频设置已更新。");
+    });
+
+    videoCameraFixedInput.addEventListener("change", (event) => {
+      shot.videoConfig.cameraFixed = Boolean(event.target.checked);
+      shot.updatedAt = new Date().toISOString();
+      queuePersistState("固定镜头设置已更新。");
     });
 
     videoWatermarkInput.addEventListener("change", (event) => {
@@ -616,16 +592,8 @@ function render() {
       await insertShotAt(index);
     });
 
-    fragment.querySelector(".insert-group-above-button").addEventListener("click", async () => {
-      await insertShotAt(index, "group");
-    });
-
     fragment.querySelector(".insert-below-button").addEventListener("click", async () => {
       await insertShotAt(index + 1);
-    });
-
-    fragment.querySelector(".insert-group-below-button").addEventListener("click", async () => {
-      await insertShotAt(index + 1, "group");
     });
 
     fragment.querySelector(".delete-button").addEventListener("click", async () => {
@@ -723,9 +691,6 @@ function renderFavorites() {
     image.alt = favorite.title ? `${favorite.title} 收藏预览` : "收藏镜头图预览";
     title.textContent = favorite.title || "未命名镜头";
     title.title = [favorite.title || "未命名镜头", ...(favorite.tags || [])].join(" · ");
-    if (favorite.type === "group") {
-      metaList.insertAdjacentHTML("beforeend", `<div class="favorite-frame-strip">${renderFavoriteFrameStrip(favorite.referenceFrames || [], 4)}</div>`);
-    }
     tile.classList.toggle("is-selected", selectedIds.has(favorite.id));
     tile.classList.toggle("is-batch-mode", isBatchMode);
     actions.hidden = isBatchMode;
@@ -788,8 +753,7 @@ function renderFavoriteHistory(container, entries, favoriteId = "") {
 }
 
 function renderFavoriteModal(favorite) {
-  const allFrames = favorite.referenceFrames || [];
-  const initialPreviewImage = allFrames.find((frame) => frame.imageDataUrl)?.imageDataUrl || favorite.imageDataUrl || "";
+  const initialPreviewImage = favorite.imageDataUrl || "";
   elements.favoriteModalContent.innerHTML = `
     <article class="shot-card favorite-detail-card">
       <div class="panel-header">
@@ -808,14 +772,8 @@ function renderFavoriteModal(favorite) {
           </div>
           <div class="favorite-meta-list">
             <p class="favorite-title">${escapeHtml(favorite.title || "未命名镜头")}</p>
-            <p class="favorite-time meta">内容类型：${favorite.type === "group" ? "镜头组" : "单镜头"}</p>
             <p class="favorite-time meta">收藏时间：${formatTime(favorite.favoritedAt)}</p>
           </div>
-          ${favorite.type === "group" ? `
-            <div class="favorite-shot-list">
-              ${renderFavoriteShotList(allFrames, initialPreviewImage)}
-            </div>
-          ` : ""}
           <label class="field compact favorite-tags-field">
             <span>新增标签</span>
             <input class="favorite-tags-input" type="text" value="" placeholder="例如：第一场，s01，角色名，奇幻">
@@ -828,14 +786,12 @@ function renderFavoriteModal(favorite) {
             <p class="favorite-notes">${escapeHtml(favorite.directorNotes || "暂无导演讲戏")}</p>
           </div>
         </section>
-        ${favorite.type === "single" ? `
-          <section class="prompt-panel favorite-detail-panel">
-            <div class="favorite-block">
-              <h3>镜头台词</h3>
-              <p class="favorite-notes">${escapeHtml(favorite.dialogue || "暂无镜头台词")}</p>
-            </div>
-          </section>
-        ` : ""}
+        <section class="prompt-panel favorite-detail-panel">
+          <div class="favorite-block">
+            <h3>镜头台词</h3>
+            <p class="favorite-notes">${escapeHtml(favorite.dialogue || "暂无镜头台词")}</p>
+          </div>
+        </section>
         <section class="prompt-panel favorite-detail-panel">
           <div class="favorite-block">
             <h3>当前 Prompt</h3>
@@ -897,29 +853,6 @@ function renderFavoriteModal(favorite) {
   elements.favoriteModalContent.querySelector(".favorite-detail-move").addEventListener("click", async () => {
     await moveFavoriteToWorkspace(favorite);
   });
-  elements.favoriteModalContent.querySelectorAll(".favorite-shot-item").forEach((button) => {
-    button.addEventListener("click", () => {
-      const nextSrc = button.dataset.frameSrc || "";
-      elements.favoriteModalContent.querySelectorAll(".favorite-shot-item").forEach((item) => {
-        item.classList.toggle("is-active", item === button);
-      });
-
-      if (!previewImageElement) {
-        return;
-      }
-
-      if (!nextSrc) {
-        previewImage.classList.remove("has-image");
-        previewImageElement.src = "";
-        previewImageElement.alt = favorite.title ? `${favorite.title} 镜头预览` : "收藏镜头图";
-        return;
-      }
-
-      previewImage.classList.add("has-image");
-      previewImageElement.src = nextSrc;
-      previewImageElement.alt = favorite.title ? `${favorite.title} 镜头预览` : "收藏镜头图";
-    });
-  });
   elements.favoriteModalContent.querySelector(".favorite-detail-remove").addEventListener("click", async () => {
     await deleteFavoritesByIds([favorite.id]);
   });
@@ -974,12 +907,11 @@ function createFavoriteSnapshot(shot, options = {}) {
   return {
     id: existing?.id || crypto.randomUUID(),
     shotId: existing?.shotId || shot.id,
-    type: shot.type || "single",
     title: shot.title,
     directorNotes: shot.directorNotes,
     dialogue: shot.dialogue || "",
     imageDataUrl: getShotCoverImage(shot),
-    referenceFrames: structuredClone(shot.referenceFrames || []),
+    references: structuredClone(shot.references || []),
     videoConfig: structuredClone(shot.videoConfig || createDefaultVideoConfig()),
     currentPrompt: shot.currentPrompt,
     promptHistory: structuredClone(shot.promptHistory || []),
@@ -996,7 +928,7 @@ function getFilteredFavorites() {
   return favorites.filter((favorite) => {
     const historyText = (favorite.promptHistory || []).map((entry) => `${entry.label} ${entry.prompt}`).join("\n");
     const tagsText = (favorite.tags || []).join("\n");
-    const frameText = (favorite.referenceFrames || []).map((frame) => `${frame.title || ""} ${frame.notes || ""} ${frame.dialogue || ""}`).join("\n");
+    const referencesText = (favorite.references || []).map((ref) => ref.title || "").join("\n");
     const haystack = [
       favorite.title,
       favorite.directorNotes,
@@ -1004,7 +936,7 @@ function getFilteredFavorites() {
       favorite.currentPrompt,
       historyText,
       tagsText,
-      frameText,
+      referencesText,
     ].join("\n").toLowerCase();
     const matchTerm = !term || haystack.includes(term);
     const matchTag = !uiState.favoriteTagFilter || (favorite.tags || []).some((tag) => tag.toLowerCase() === uiState.favoriteTagFilter);
@@ -1022,17 +954,14 @@ async function moveFavoriteToWorkspace(favorite) {
 }
 
 function createWorkspaceShotFromFavorite(favorite) {
-  const shot = createShot(favorite.type || "single");
+  const shot = createShot();
   shot.title = favorite.title || "";
   shot.directorNotes = favorite.directorNotes || "";
   shot.dialogue = favorite.dialogue || "";
-  shot.imageDataUrl = shot.type === "group" ? "" : (favorite.imageDataUrl || "");
+  shot.imageDataUrl = favorite.imageDataUrl || "";
   shot.linkedFavoriteId = favorite.id;
-  shot.referenceFrames = structuredClone(favorite.referenceFrames || []);
+  shot.references = structuredClone(favorite.references || []);
   shot.videoConfig = normalizeShotVideoConfig(favorite.videoConfig);
-  if (shot.type === "group") {
-    applyLegacyGroupDialogueToFrames(shot.referenceFrames, shot.dialogue);
-  }
   shot.currentPrompt = favorite.currentPrompt || "";
   shot.promptHistory = structuredClone(favorite.promptHistory || []);
   shot.chatHistory = structuredClone(favorite.chatHistory || []);
@@ -1266,245 +1195,193 @@ function bindImageDropZone(imageFrame, imageInput, shot) {
   });
 }
 
-function bindGroupUploadZone(uploadFrame, input, shot) {
-  uploadFrame.addEventListener("click", () => {
-    input.click();
+function renderReferences(container, shot) {
+  container.innerHTML = "";
+
+  if (!shot.references.length) {
+    container.innerHTML = '<div class="empty-state">暂无参考素材。拖拽或点击下方区域上传图片、视频或音频。</div>';
+    return;
+  }
+
+  shot.references.forEach((ref, index) => {
+    const item = document.createElement("div");
+    item.className = "reference-item";
+
+    let previewHtml = "";
+    if (ref.mediaType === "image" && ref.url) {
+      previewHtml = `<img class="reference-item-preview" src="${escapeHtml(ref.url)}" alt="${escapeHtml(ref.title || `参考图 ${index + 1}`)}">`;
+    } else if (ref.mediaType === "video") {
+      previewHtml = '<div class="reference-item-icon">视频</div>';
+    } else if (ref.mediaType === "audio") {
+      previewHtml = '<div class="reference-item-icon">音频</div>';
+    }
+
+    const roleSelectHtml = ref.mediaType === "image" ? `
+      <select class="reference-role-select">
+        <option value=""${!ref.role ? " selected" : ""}>自动</option>
+        <option value="first_frame"${ref.role === "first_frame" ? " selected" : ""}>首帧</option>
+        <option value="last_frame"${ref.role === "last_frame" ? " selected" : ""}>尾帧</option>
+        <option value="reference_image"${ref.role === "reference_image" ? " selected" : ""}>参考图</option>
+      </select>
+    ` : "";
+
+    const titleHtml = ref.title ? `<span class="reference-item-title">${escapeHtml(ref.title)}</span>` : "";
+
+    item.innerHTML = `
+      <div class="reference-item-content">
+        ${previewHtml}
+        <div class="reference-item-meta">
+          ${titleHtml}
+          ${roleSelectHtml}
+        </div>
+      </div>
+      <button class="ghost-button reference-delete-button danger" type="button" aria-label="删除参考素材">×</button>
+    `;
+
+    const roleSelect = item.querySelector(".reference-role-select");
+    if (roleSelect) {
+      roleSelect.addEventListener("change", (event) => {
+        ref.role = event.target.value;
+        shot.updatedAt = new Date().toISOString();
+        queuePersistState("参考素材角色已更新。");
+      });
+    }
+
+    item.querySelector(".reference-delete-button").addEventListener("click", async () => {
+      shot.references = shot.references.filter((entry) => entry.id !== ref.id);
+      shot.updatedAt = new Date().toISOString();
+      await persistState("参考素材已删除。");
+      render();
+    });
+
+    if (ref.mediaType === "image" && ref.url) {
+      const preview = item.querySelector(".reference-item-preview");
+      if (preview) {
+        preview.addEventListener("click", () => {
+          openLightbox(ref.url, ref.title || shot.title);
+        });
+        preview.style.cursor = "pointer";
+      }
+    }
+
+    container.append(item);
+  });
+}
+
+function updateReferencesCapacity(capacityElement, shot) {
+  const refs = shot.references || [];
+  const imageCount = refs.filter((r) => r.mediaType === "image").length;
+  const videoCount = refs.filter((r) => r.mediaType === "video").length;
+  const audioCount = refs.filter((r) => r.mediaType === "audio").length;
+  capacityElement.textContent = `图片 ${imageCount}/9 \u00b7 视频 ${videoCount}/3 \u00b7 音频 ${audioCount}/3`;
+}
+
+function bindReferencesUploadZone(uploadZone, uploadInput, shot) {
+  uploadZone.addEventListener("click", () => {
+    uploadInput.click();
   });
 
-  uploadFrame.addEventListener("dragover", (event) => {
+  uploadZone.addEventListener("dragover", (event) => {
     event.preventDefault();
-    uploadFrame.classList.add("drag-over");
+    uploadZone.classList.add("drag-over");
   });
 
-  uploadFrame.addEventListener("dragenter", (event) => {
+  uploadZone.addEventListener("dragenter", (event) => {
     event.preventDefault();
-    uploadFrame.classList.add("drag-over");
+    uploadZone.classList.add("drag-over");
   });
 
-  uploadFrame.addEventListener("dragleave", (event) => {
+  uploadZone.addEventListener("dragleave", (event) => {
     if (event.currentTarget.contains(event.relatedTarget)) {
       return;
     }
-    uploadFrame.classList.remove("drag-over");
+    uploadZone.classList.remove("drag-over");
   });
 
-  uploadFrame.addEventListener("drop", async (event) => {
+  uploadZone.addEventListener("drop", async (event) => {
     event.preventDefault();
-    uploadFrame.classList.remove("drag-over");
+    uploadZone.classList.remove("drag-over");
     const files = Array.from(event.dataTransfer?.files || []);
     if (!files.length) {
       return;
     }
 
     try {
-      await addFilesToGroupShot(shot, files);
+      await addReferencesFromFiles(shot, files);
       render();
     } catch (error) {
-      reportRuntimeError(error, "拖拽上传镜头组图片失败。");
+      reportRuntimeError(error, "拖拽上传参考素材失败。");
     }
   });
-}
 
-function renderReferenceFrames(container, shot) {
-  container.innerHTML = "";
-
-  if (!shot.referenceFrames.length) {
-    container.innerHTML = '<div class="empty-state group-empty">这个镜头组还没有镜头。直接在上方拖拽或点击上传 1 到多张图即可。</div>';
-    return;
-  }
-
-  shot.referenceFrames.forEach((frame, index) => {
-    const item = document.createElement("div");
-    item.className = "reference-frame-card";
-    item.innerHTML = `
-      <div class="reference-frame-head">
-        <span class="reference-frame-order">镜头 ${index + 1}</span>
-        <div class="reference-frame-actions">
-          <button class="ghost-button insert-reference-before" type="button">上插</button>
-          <button class="ghost-button insert-reference-after" type="button">下插</button>
-          <button class="ghost-button delete-reference danger" type="button">删除</button>
-        </div>
-      </div>
-      <div class="reference-frame-grid">
-        <div>
-          <div class="image-frame ${frame.imageDataUrl ? "has-image" : ""}">
-            <img class="shot-image" src="${escapeHtml(frame.imageDataUrl || "")}" alt="${escapeHtml(`镜头 ${index + 1}`)}">
-            <input class="reference-image-input hidden-file-input" type="file" accept="image/*">
-            <div class="image-empty">拖拽或点击上传</div>
-            <button class="image-delete-button" type="button" aria-label="删除镜头图">×</button>
-          </div>
-        </div>
-        <div>
-          <label class="field compact">
-            <span>镜头内容</span>
-            <textarea class="reference-notes-input" rows="4" placeholder="例如：镜头轻推近，人物回头，风吹动头发，夕阳逆光。">${escapeHtml(frame.notes || "")}</textarea>
-          </label>
-          <label class="field compact">
-            <span>镜头台词</span>
-            <textarea class="reference-dialogue-input" rows="3" placeholder="例如：你终于来了。今天这一步，我已经等很久了。">${escapeHtml(frame.dialogue || "")}</textarea>
-          </label>
-        </div>
-      </div>
-    `;
-
-    const frameImage = item.querySelector(".image-frame");
-    const frameImageInput = item.querySelector(".reference-image-input");
-    const notesInput = item.querySelector(".reference-notes-input");
-    const dialogueInput = item.querySelector(".reference-dialogue-input");
-
-    bindReferenceFrameDropZone(frameImage, frameImageInput, shot, frame);
-
-    notesInput.addEventListener("input", (event) => {
-      frame.notes = event.target.value;
-      shot.updatedAt = new Date().toISOString();
-      queuePersistState("镜头说明已更新。");
-    });
-
-    dialogueInput.addEventListener("input", (event) => {
-      frame.dialogue = event.target.value;
-      shot.updatedAt = new Date().toISOString();
-      queuePersistState("镜头台词已更新。");
-    });
-
-    frameImageInput.addEventListener("change", async (event) => {
-      const [file] = Array.from(event.target.files || []);
-      if (!file) {
-        return;
-      }
-
-      try {
-        await updateReferenceFrameImage(shot, frame, file, "镜头图已更新。");
-        render();
-      } catch (error) {
-        reportRuntimeError(error, "子镜头图片上传失败。");
-      } finally {
-        event.target.value = "";
-      }
-    });
-
-    item.querySelector(".insert-reference-before").addEventListener("click", async () => {
-      shot.referenceFrames.splice(index, 0, createReferenceFrame());
-      shot.updatedAt = new Date().toISOString();
-      await persistState("已插入镜头。");
-      render();
-    });
-
-    item.querySelector(".insert-reference-after").addEventListener("click", async () => {
-      shot.referenceFrames.splice(index + 1, 0, createReferenceFrame());
-      shot.updatedAt = new Date().toISOString();
-      await persistState("已插入镜头。");
-      render();
-    });
-
-    item.querySelector(".delete-reference").addEventListener("click", async () => {
-      if (shot.referenceFrames.length === 1) {
-        setStatus("至少保留一个镜头，或直接删除整个镜头组。");
-        return;
-      }
-
-      shot.referenceFrames = shot.referenceFrames.filter((entry) => entry.id !== frame.id);
-      shot.updatedAt = new Date().toISOString();
-      await persistState("镜头已删除。");
-      render();
-    });
-
-    container.append(item);
-  });
-}
-
-function bindReferenceFrameDropZone(imageFrame, imageInput, shot, frame) {
-  imageFrame.querySelector(".image-delete-button")?.addEventListener("click", async (event) => {
-    event.stopPropagation();
-    if (!frame.imageDataUrl) {
-      return;
-    }
-
-    frame.imageDataUrl = "";
-    shot.updatedAt = new Date().toISOString();
-    await persistState("镜头图已删除。");
-    render();
-  });
-
-  imageFrame.addEventListener("click", () => {
-    if (frame.imageDataUrl) {
-      openLightbox(frame.imageDataUrl, frame.title || shot.title);
-      return;
-    }
-
-    imageInput.click();
-  });
-
-  imageFrame.addEventListener("dragover", (event) => {
-    event.preventDefault();
-    imageFrame.classList.add("drag-over");
-  });
-
-  imageFrame.addEventListener("dragenter", (event) => {
-    event.preventDefault();
-    imageFrame.classList.add("drag-over");
-  });
-
-  imageFrame.addEventListener("dragleave", (event) => {
-    if (event.currentTarget.contains(event.relatedTarget)) {
-      return;
-    }
-    imageFrame.classList.remove("drag-over");
-  });
-
-  imageFrame.addEventListener("drop", async (event) => {
-    event.preventDefault();
-    imageFrame.classList.remove("drag-over");
-    const [file] = Array.from(event.dataTransfer?.files || []);
-    if (!file) {
-      return;
-    }
-
-    if (!isProbablyImageFile(file)) {
-      setStatus("请拖入图片文件。");
+  uploadInput.addEventListener("change", async (event) => {
+    const files = Array.from(event.target.files || []);
+    if (!files.length) {
       return;
     }
 
     try {
-      await updateReferenceFrameImage(shot, frame, file, "拖拽镜头图上传成功。");
+      await addReferencesFromFiles(shot, files);
       render();
     } catch (error) {
-      reportRuntimeError(error, "拖拽上传子镜头图片失败。");
+      reportRuntimeError(error, "参考素材上传失败。");
+    } finally {
+      event.target.value = "";
     }
   });
 }
 
-async function addFilesToGroupShot(shot, files) {
-  const imageFiles = files.filter((file) => isProbablyImageFile(file));
-  if (!imageFiles.length) {
-    setStatus("请上传图片文件。");
-    return;
-  }
+async function addReferencesFromFiles(shot, files) {
+  const refs = Array.isArray(shot.references) ? shot.references : [];
+  const counts = {
+    image: refs.filter((r) => r.mediaType === "image").length,
+    video: refs.filter((r) => r.mediaType === "video").length,
+    audio: refs.filter((r) => r.mediaType === "audio").length,
+  };
+  const limits = { image: 9, video: 3, audio: 3 };
+  let addedCount = 0;
 
-  setStatus(`正在导入 ${imageFiles.length} 张镜头图...`);
-  const existingFrames = Array.isArray(shot.referenceFrames) ? shot.referenceFrames : [];
-  const firstBlankIndex = existingFrames.findIndex(isReferenceFrameEmpty);
-  let writeIndex = firstBlankIndex >= 0 ? firstBlankIndex : existingFrames.length;
-
-  for (const file of imageFiles) {
-    const nextFrame = await createReferenceFrameFromFile(file);
-    if (writeIndex < existingFrames.length) {
-      const currentFrame = existingFrames[writeIndex];
-      currentFrame.imageDataUrl = nextFrame.imageDataUrl;
-      if (!currentFrame.title) {
-        currentFrame.title = nextFrame.title;
-      }
-      if (!currentFrame.notes) {
-        currentFrame.notes = nextFrame.notes;
-      }
+  for (const file of files) {
+    let mediaType = "";
+    if (file.type.startsWith("image/")) {
+      mediaType = "image";
+    } else if (file.type.startsWith("video/")) {
+      mediaType = "video";
+    } else if (file.type.startsWith("audio/")) {
+      mediaType = "audio";
     } else {
-      existingFrames.push(nextFrame);
+      continue;
     }
-    writeIndex += 1;
+
+    if (counts[mediaType] >= limits[mediaType]) {
+      continue;
+    }
+
+    let url = "";
+    const title = file.name.replace(/\.[^.]+$/, "");
+    if (mediaType === "image") {
+      url = await optimizeImageFile(file);
+    } else {
+      url = await readFileAsDataUrl(file);
+    }
+
+    refs.push(createReference(mediaType, url, "", title));
+    counts[mediaType] += 1;
+    addedCount += 1;
   }
 
-  shot.referenceFrames = existingFrames;
+  shot.references = refs;
   shot.updatedAt = new Date().toISOString();
-  await persistState(`已为镜头组导入 ${imageFiles.length} 张镜头图。`);
+  await persistState(`已添加 ${addedCount} 个参考素材。`);
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("读取文件失败。"));
+    reader.readAsDataURL(file);
+  });
 }
 
 function openLightbox(src, title) {
@@ -1647,7 +1524,7 @@ async function handleGeneratePrompt(shotId, button) {
 
   const imageDataUrls = getShotReferenceImages(shot);
   if (!imageDataUrls.length) {
-    setStatus(shot.type === "group" ? "请先为这个镜头组上传至少一张镜头图。" : "请先为这个镜头上传图片。");
+    setStatus("请先为这个镜头上传图片。");
     return;
   }
 
@@ -1864,7 +1741,6 @@ async function handleRefreshVideoTask(shotId, button) {
 function buildVideoGenerationPayload(shot) {
   const prompt = shot.currentPrompt.trim();
   const videoConfig = normalizeShotVideoConfig(shot.videoConfig);
-  const referenceImages = getShotReferenceImages(shot);
   const content = [
     {
       type: "text",
@@ -1872,79 +1748,73 @@ function buildVideoGenerationPayload(shot) {
     },
   ];
 
-  if (shot.type === "single") {
-    if (shot.imageDataUrl) {
+  const hasFirstFrame = (shot.references || []).some((r) => r.role === "first_frame");
+  if (shot.imageDataUrl && !hasFirstFrame) {
+    content.push({
+      type: "image_url",
+      image_url: { url: shot.imageDataUrl },
+      role: "first_frame",
+    });
+  } else if (shot.imageDataUrl) {
+    content.push({
+      type: "image_url",
+      image_url: { url: shot.imageDataUrl },
+      role: "reference_image",
+    });
+  }
+
+  for (const ref of (shot.references || [])) {
+    if (ref.mediaType === "image" && ref.url) {
       content.push({
         type: "image_url",
-        image_url: { url: shot.imageDataUrl },
-        role: "first_frame",
+        image_url: { url: ref.url },
+        role: ref.role || "reference_image",
+      });
+    } else if (ref.mediaType === "video" && ref.url) {
+      content.push({
+        type: "video_url",
+        video_url: { url: ref.url },
+        role: "reference_video",
+      });
+    } else if (ref.mediaType === "audio" && ref.url) {
+      content.push({
+        type: "audio_url",
+        audio_url: { url: ref.url },
+        role: "reference_audio",
       });
     }
-  } else {
-    appendGroupVideoImages(content, shot, referenceImages, videoConfig.groupInputMode);
   }
 
   return {
     model: normalizeVideoProvider(state.settings.videoProvider).model,
     content,
-    groupInputMode: shot.type === "group" ? videoConfig.groupInputMode : "",
     ratio: videoConfig.ratio,
     duration: videoConfig.duration,
     resolution: videoConfig.resolution || undefined,
     seed: videoConfig.seed,
+    generate_audio: videoConfig.generateAudio !== false,
+    camera_fixed: Boolean(videoConfig.cameraFixed),
     watermark: Boolean(videoConfig.watermark),
     return_last_frame: Boolean(videoConfig.returnLastFrame),
   };
 }
 
-function appendGroupVideoImages(content, shot, referenceImages, groupInputMode) {
-  const images = Array.isArray(referenceImages) ? referenceImages.filter(Boolean) : [];
-  if (!images.length) {
-    return;
-  }
-
-  if (groupInputMode === "first_last") {
-    const firstFrame = images[0];
-    const lastFrame = images.length > 1 ? images[images.length - 1] : "";
-    if (firstFrame) {
-      content.push({
-        type: "image_url",
-        image_url: { url: firstFrame },
-        role: "first_frame",
-      });
-    }
-    if (lastFrame) {
-      content.push({
-        type: "image_url",
-        image_url: { url: lastFrame },
-        role: "last_frame",
-      });
-    }
-    return;
-  }
-
-  const normalizedFrames = Array.isArray(shot.referenceFrames) ? shot.referenceFrames : [];
-  const usableFrames = normalizedFrames
-    .filter((frame) => frame?.imageDataUrl)
-    .slice(0, 4);
-
-  usableFrames.forEach((frame, index) => {
-    content.push({
-      type: "image_url",
-      image_url: { url: frame.imageDataUrl },
-      role: "reference",
-      name: frame.title?.trim() || `reference_${index + 1}`,
-    });
-  });
-}
-
 function summarizeVideoPayload(payload) {
+  const contentItems = Array.isArray(payload.content) ? payload.content : [];
+  const imageCount = contentItems.filter((c) => c.type === "image_url").length;
+  const videoCount = contentItems.filter((c) => c.type === "video_url").length;
+  const audioCount = contentItems.filter((c) => c.type === "audio_url").length;
+  const refParts = [];
+  if (imageCount) refParts.push(`${imageCount}张图`);
+  if (videoCount) refParts.push(`${videoCount}个视频`);
+  if (audioCount) refParts.push(`${audioCount}个音频`);
   return [
-    payload.groupInputMode === "reference" ? "镜头组多参考图" : "",
-    payload.groupInputMode === "first_last" ? "镜头组首尾帧" : "",
+    refParts.length ? `参考素材 ${refParts.join("+")}` : "",
     payload.ratio ? `比例 ${payload.ratio}` : "",
     payload.duration ? `时长 ${payload.duration}s` : "",
     payload.resolution ? `分辨率 ${payload.resolution}` : "",
+    payload.generate_audio === false ? "无声" : "有声",
+    payload.camera_fixed ? "固定镜头" : "",
   ].filter(Boolean).join(" · ");
 }
 
@@ -2053,26 +1923,23 @@ function buildGenerationInstruction(shot) {
   const currentPrompt = shot.currentPrompt.trim();
   const direction = state.settings.globalDirection.trim();
   const directorNotes = (shot.directorNotes || "").trim();
-  const dialogue = shot.type === "group" ? "" : (shot.dialogue || "").trim();
+  const dialogue = (shot.dialogue || "").trim();
   const title = shot.title.trim() || "未命名镜头";
-  const groupNotes = buildReferenceFrameInstruction(shot);
+  const refCount = (shot.references || []).length;
 
   return [
     "你是专业的视频生成提示词导演。",
-    shot.type === "group"
-      ? "请基于输入的多张镜头图，输出一段适合全能参考/多图参考/切镜模式的高质量中文视频生成 Prompt。"
-      : "请基于输入图片，输出一段高质量中文视频生成 Prompt。",
+    "请基于输入图片，输出一段高质量中文视频生成 Prompt。",
     "要求：",
     "1. 直接输出最终 Prompt，不要解释",
     "2. 包含运镜、主体、动作、镜头语言、氛围",
     "3. 风格要适合图生视频模型，文字具体、可执行、画面感强",
     dialogue ? "4. 如果用户提供了台词，必须在最终 Prompt 中保留这段台词，不要改写台词内容。" : "",
-    shot.type === "group" ? "5. 必须显式交代各镜头之间的切换关系、镜头推进顺序和段落节奏" : "",
     `镜头标题：${title}`,
     directorNotes ? `导演讲戏：${directorNotes}` : "",
     dialogue ? `镜头台词：${dialogue}` : "",
     direction ? `全局风格备注：${direction}` : "",
-    groupNotes,
+    refCount > 0 ? `附带了 ${refCount} 个参考素材。` : "",
     currentPrompt ? `用户已有草稿，请在保留有用意图的前提下重写提升：${currentPrompt}` : "用户暂未提供草稿，请直接从图片生成。",
   ].filter(Boolean).join("\n");
 }
@@ -2081,9 +1948,9 @@ function buildRevisionInstruction(shot, feedback) {
   const title = shot.title.trim() || "未命名镜头";
   const direction = state.settings.globalDirection.trim();
   const directorNotes = (shot.directorNotes || "").trim();
-  const dialogue = shot.type === "group" ? "" : (shot.dialogue || "").trim();
+  const dialogue = (shot.dialogue || "").trim();
   const currentPrompt = shot.currentPrompt.trim();
-  const groupNotes = buildReferenceFrameInstruction(shot);
+  const refCount = (shot.references || []).length;
 
   return [
     "你是专业的视频生成提示词导演。",
@@ -2094,38 +1961,13 @@ function buildRevisionInstruction(shot, feedback) {
     "3. 即使当前 Prompt 是用户手写的，也要在保留其核心意图的前提下精准修改。",
     "4. 如果输入图片存在，可继续结合图片修正画面细节。",
     dialogue ? "5. 如果该镜头提供了台词，修改时必须保留这段台词，不要删改台词内容。" : "",
-    shot.type === "group" ? "6. 当前任务是镜头组，多镜头之间的切换设计不能丢失。" : "",
     `镜头标题：${title}`,
     directorNotes ? `导演讲戏：${directorNotes}` : "",
     dialogue ? `镜头台词：${dialogue}` : "",
     direction ? `全局风格备注：${direction}` : "",
-    groupNotes,
+    refCount > 0 ? `附带了 ${refCount} 个参考素材。` : "",
     `当前 Prompt：${currentPrompt || "暂无"}`,
     `用户本次反馈：${feedback}`,
-  ].filter(Boolean).join("\n");
-}
-
-function buildReferenceFrameInstruction(shot) {
-  if (shot.type !== "group") {
-    return "";
-  }
-
-  const frameLines = (shot.referenceFrames || []).map((frame, index) => {
-    const parts = [`镜头 ${index + 1}`];
-    if (frame.notes?.trim()) {
-      parts.push(`要点：${frame.notes.trim()}`);
-    }
-    if (frame.dialogue?.trim()) {
-      parts.push(`台词：${frame.dialogue.trim()}`);
-    }
-    return parts.join("，");
-  });
-
-  return [
-    "这是一个镜头组任务。",
-    frameLines.length ? `镜头顺序：\n${frameLines.join("\n")}` : "",
-    (shot.referenceFrames || []).some((frame) => frame.dialogue?.trim()) ? "如果某个镜头提供了台词，最终 Prompt 中必须保留对应镜头的台词，不要改写台词内容。" : "",
-    "请根据镜头顺序自行补全自然、清晰的切换节奏。",
   ].filter(Boolean).join("\n");
 }
 
@@ -2397,9 +2239,9 @@ function parseDataUrl(dataUrl) {
   };
 }
 
-async function insertShotAt(index, type = "single") {
-  state.shots.splice(index, 0, createShot(type));
-  await persistState(type === "group" ? "已插入新镜头组。" : "已插入新镜头。");
+async function insertShotAt(index) {
+  state.shots.splice(index, 0, createShot());
+  await persistState("已插入新镜头。");
   render();
 }
 
@@ -2453,17 +2295,16 @@ function pushHistoryEntry(shot, prompt, label) {
   return true;
 }
 
-function createShot(type = "single") {
+function createShot() {
   const now = new Date().toISOString();
   return {
     id: crypto.randomUUID(),
     linkedFavoriteId: "",
-    type,
     title: "",
     directorNotes: "",
     dialogue: "",
     imageDataUrl: "",
-    referenceFrames: type === "group" ? [createReferenceFrame()] : [],
+    references: [],
     videoConfig: createDefaultVideoConfig(),
     videoTask: createEmptyVideoTask(),
     currentPrompt: "",
@@ -2474,28 +2315,21 @@ function createShot(type = "single") {
   };
 }
 
-async function createShotFromFile(file) {
-  const shot = createShot("single");
-  shot.title = file.name.replace(/\.[^.]+$/, "");
-  shot.imageDataUrl = await optimizeImageFile(file);
-  return shot;
-}
-
-function createReferenceFrame() {
+function createReference(mediaType, url, role, title) {
   return {
     id: crypto.randomUUID(),
-    title: "",
-    notes: "",
-    dialogue: "",
-    imageDataUrl: "",
+    mediaType: mediaType || "image",
+    url: url || "",
+    role: role || "",
+    title: title || "",
   };
 }
 
-async function createReferenceFrameFromFile(file) {
-  const frame = createReferenceFrame();
-  frame.title = file.name.replace(/\.[^.]+$/, "");
-  frame.imageDataUrl = await optimizeImageFile(file);
-  return frame;
+async function createShotFromFile(file) {
+  const shot = createShot();
+  shot.title = file.name.replace(/\.[^.]+$/, "");
+  shot.imageDataUrl = await optimizeImageFile(file);
+  return shot;
 }
 
 async function updateShotImage(shot, file, message) {
@@ -2505,17 +2339,6 @@ async function updateShotImage(shot, file, message) {
   }
 
   shot.imageDataUrl = await optimizeImageFile(file);
-  shot.updatedAt = new Date().toISOString();
-  await persistState(message);
-}
-
-async function updateReferenceFrameImage(shot, frame, file, message) {
-  if (!isProbablyImageFile(file)) {
-    setStatus("请选择图片文件。");
-    return;
-  }
-
-  frame.imageDataUrl = await optimizeImageFile(file);
   shot.updatedAt = new Date().toISOString();
   await persistState(message);
 }
@@ -2548,11 +2371,12 @@ function createDefaultVideoProvider() {
 
 function createDefaultVideoConfig() {
   return {
-    groupInputMode: "reference",
     ratio: "16:9",
     duration: 5,
     resolution: "",
     seed: null,
+    generateAudio: true,
+    cameraFixed: false,
     watermark: false,
     returnLastFrame: false,
   };
@@ -2577,11 +2401,12 @@ function normalizeShotVideoConfig(input) {
   return {
     ...createDefaultVideoConfig(),
     ...(input || {}),
-    groupInputMode: input?.groupInputMode === "first_last" ? "first_last" : "reference",
     ratio: String(input?.ratio || "16:9").trim() || "16:9",
     duration: clampVideoDuration(input?.duration),
     resolution: String(input?.resolution || "").trim(),
     seed: normalizeVideoSeed(input?.seed),
+    generateAudio: input?.generateAudio !== false,
+    cameraFixed: Boolean(input?.cameraFixed),
     watermark: Boolean(input?.watermark),
     returnLastFrame: Boolean(input?.returnLastFrame),
   };
@@ -2688,7 +2513,7 @@ function clampVideoDuration(value) {
     return 5;
   }
 
-  return Math.max(2, Math.min(12, duration));
+  return Math.max(4, Math.min(15, duration));
 }
 
 function normalizeVideoSeed(value) {
@@ -2740,10 +2565,6 @@ function renderVideoResult({ shot, videoTaskLabel, generatedVideo, videoLastFram
   videoResultMeta.innerHTML = metaLines.join("<br>");
 }
 
-function isReferenceFrameEmpty(frame) {
-  return !frame?.title && !frame?.notes && !frame?.dialogue && !frame?.imageDataUrl;
-}
-
 function isProbablyImageFile(file) {
   if (!file) {
     return false;
@@ -2757,12 +2578,11 @@ function isProbablyImageFile(file) {
 }
 
 function isShotEmpty(shot) {
-  const hasReferenceFrames = (shot.referenceFrames || []).some((frame) => frame.title || frame.notes || frame.dialogue || frame.imageDataUrl);
   return !shot.title
     && !shot.directorNotes
     && !shot.dialogue
     && !shot.imageDataUrl
-    && !hasReferenceFrames
+    && !(shot.references || []).length
     && !shot.currentPrompt
     && !shot.promptHistory.length
     && !shot.chatHistory.length;
@@ -2891,20 +2711,30 @@ function normalizeApiKeys(settings) {
 
 function normalizeShot(input) {
   const now = new Date().toISOString();
-  const type = input?.type === "group" ? "group" : "single";
-  const dialogue = input?.dialogue || "";
-  const referenceFrames = type === "group"
-    ? normalizeReferenceFrames(input?.referenceFrames, input?.imageDataUrl, dialogue)
-    : [];
+  let references = normalizeReferences(input?.references);
+  let imageDataUrl = input?.imageDataUrl || "";
+
+  // Migration: convert old group shots with referenceFrames to references
+  if (input?.type === "group" && Array.isArray(input?.referenceFrames) && input.referenceFrames.length) {
+    const migratedRefs = input.referenceFrames
+      .filter((frame) => frame?.imageDataUrl)
+      .map((frame) => createReference("image", frame.imageDataUrl, "reference", frame.title || ""));
+    if (migratedRefs.length && !references.length) {
+      references = migratedRefs;
+    }
+    if (!imageDataUrl && input.referenceFrames[0]?.imageDataUrl) {
+      imageDataUrl = input.referenceFrames[0].imageDataUrl;
+    }
+  }
+
   return {
     id: input?.id || crypto.randomUUID(),
     linkedFavoriteId: input?.linkedFavoriteId || "",
-    type,
     title: input?.title || "",
     directorNotes: input?.directorNotes || "",
-    dialogue,
-    imageDataUrl: type === "single" ? (input?.imageDataUrl || "") : (input?.imageDataUrl || ""),
-    referenceFrames,
+    dialogue: input?.dialogue || "",
+    imageDataUrl,
+    references,
     videoConfig: normalizeShotVideoConfig(input?.videoConfig),
     videoTask: normalizeVideoTask(input?.videoTask),
     currentPrompt: input?.currentPrompt || "",
@@ -2917,20 +2747,26 @@ function normalizeShot(input) {
 
 function normalizeFavorite(input) {
   const now = new Date().toISOString();
-  const type = input?.type === "group" ? "group" : "single";
-  const dialogue = input?.dialogue || "";
-  const referenceFrames = type === "group"
-    ? normalizeReferenceFrames(input?.referenceFrames, input?.imageDataUrl, dialogue)
-    : [];
+  let references = normalizeReferences(input?.references);
+
+  // Migration: convert old group favorites with referenceFrames to references
+  if (input?.type === "group" && Array.isArray(input?.referenceFrames) && input.referenceFrames.length) {
+    const migratedRefs = input.referenceFrames
+      .filter((frame) => frame?.imageDataUrl)
+      .map((frame) => createReference("image", frame.imageDataUrl, "reference", frame.title || ""));
+    if (migratedRefs.length && !references.length) {
+      references = migratedRefs;
+    }
+  }
+
   return {
     id: input?.id || crypto.randomUUID(),
     shotId: input?.shotId || "",
-    type,
     title: input?.title || "",
     directorNotes: input?.directorNotes || "",
-    dialogue,
+    dialogue: input?.dialogue || "",
     imageDataUrl: input?.imageDataUrl || "",
-    referenceFrames,
+    references,
     videoConfig: normalizeShotVideoConfig(input?.videoConfig),
     currentPrompt: input?.currentPrompt || "",
     promptHistory: Array.isArray(input?.promptHistory) ? input.promptHistory.map(normalizeHistoryEntry) : [],
@@ -2949,49 +2785,36 @@ function normalizeFavoriteTags(input) {
   return [...new Set(input.map((tag) => String(tag || "").trim()).filter(Boolean))];
 }
 
-function normalizeReferenceFrames(input, fallbackImageDataUrl = "", legacyDialogue = "") {
-  const frames = Array.isArray(input) ? input : [];
-  if (frames.length) {
-    const normalizedFrames = frames.map((frame) => ({
-      id: frame?.id || crypto.randomUUID(),
-      title: frame?.title || "",
-      notes: frame?.notes || "",
-      dialogue: frame?.dialogue || "",
-      imageDataUrl: frame?.imageDataUrl || "",
-    }));
-    applyLegacyGroupDialogueToFrames(normalizedFrames, legacyDialogue);
-    return normalizedFrames;
+function normalizeReferences(input) {
+  if (!Array.isArray(input)) {
+    return [];
   }
 
-  if (fallbackImageDataUrl) {
-    const normalizedFrames = [{
-      id: crypto.randomUUID(),
-      title: "",
-      notes: "",
-      dialogue: "",
-      imageDataUrl: fallbackImageDataUrl,
-    }];
-    applyLegacyGroupDialogueToFrames(normalizedFrames, legacyDialogue);
-    return normalizedFrames;
+  const validTypes = ["image", "video", "audio"];
+  const counts = { image: 0, video: 0, audio: 0 };
+  const limits = { image: 9, video: 3, audio: 3 };
+  const result = [];
+
+  for (const item of input) {
+    const mediaType = validTypes.includes(item?.mediaType) ? item.mediaType : "";
+    if (!mediaType) {
+      continue;
+    }
+    if (counts[mediaType] >= limits[mediaType]) {
+      continue;
+    }
+
+    result.push({
+      id: item?.id || crypto.randomUUID(),
+      mediaType,
+      url: String(item?.url || ""),
+      role: String(item?.role || ""),
+      title: String(item?.title || ""),
+    });
+    counts[mediaType] += 1;
   }
 
-  const normalizedFrames = [createReferenceFrame()];
-  applyLegacyGroupDialogueToFrames(normalizedFrames, legacyDialogue);
-  return normalizedFrames;
-}
-
-function applyLegacyGroupDialogueToFrames(frames, legacyDialogue) {
-  const nextDialogue = String(legacyDialogue || "").trim();
-  if (!nextDialogue || !Array.isArray(frames) || !frames.length) {
-    return;
-  }
-
-  const hasFrameDialogue = frames.some((frame) => String(frame?.dialogue || "").trim());
-  if (hasFrameDialogue) {
-    return;
-  }
-
-  frames[0].dialogue = nextDialogue;
+  return result;
 }
 
 function parseFavoriteTags(input) {
@@ -3038,60 +2861,10 @@ function renderFavoriteTags(tags) {
 }
 
 function renderFavoritePreviewSummary(favorite) {
-  if (favorite.type !== "group") {
-    return '<p class="favorite-time meta">单镜头</p>';
-  }
-
-  const frames = favorite.referenceFrames || [];
-  return [
-    `<p class="favorite-time meta">${frames.length} 个镜头</p>`,
-    `<div class="favorite-frame-strip">${renderFavoriteFrameStrip(frames, 4)}</div>`,
-  ].join("");
-}
-
-function renderFavoriteFrameStrip(frames, limit = 4, interactive = false, activeSrc = "") {
-  const visibleFrames = (frames || []).filter((frame) => frame.imageDataUrl).slice(0, limit);
-  if (!visibleFrames.length) {
-    return '<span class="meta favorite-frame-empty">暂无镜头图</span>';
-  }
-
-  if (interactive) {
-    return visibleFrames.map((frame, index) => `
-      <button class="favorite-frame-thumb favorite-frame-thumb-button${frame.imageDataUrl === activeSrc ? " is-active" : ""}" type="button" data-frame-src="${escapeHtml(frame.imageDataUrl || "")}" aria-label="${escapeHtml(`查看镜头 ${index + 1}`)}">
-        <img src="${escapeHtml(frame.imageDataUrl || "")}" alt="${escapeHtml(`镜头 ${index + 1} 缩略图`)}">
-      </button>
-    `).join("");
-  }
-
-  return visibleFrames.map((frame, index) => `
-    <span class="favorite-frame-thumb">
-      <img src="${escapeHtml(frame.imageDataUrl || "")}" alt="${escapeHtml(`镜头 ${index + 1} 缩略图`)}">
-    </span>
-  `).join("");
-}
-
-function renderFavoriteShotList(frames, activeSrc = "") {
-  if (!frames.length) {
-    return '<div class="empty-state">这个镜头组还没有镜头内容。</div>';
-  }
-
-  return frames.map((frame, index) => {
-    const isActive = (frame.imageDataUrl || "") === activeSrc || (!activeSrc && !frame.imageDataUrl && index === 0);
-    return `
-      <button class="favorite-shot-item${isActive ? " is-active" : ""}" type="button" data-frame-src="${escapeHtml(frame.imageDataUrl || "")}">
-        <div class="favorite-shot-thumb ${frame.imageDataUrl ? "has-image" : ""}">
-          ${frame.imageDataUrl
-            ? `<img src="${escapeHtml(frame.imageDataUrl)}" alt="${escapeHtml(`镜头 ${index + 1} 预览`)}">`
-            : '<div class="favorite-shot-thumb-empty">未上传镜头图</div>'}
-        </div>
-        <div class="favorite-shot-copy">
-          <p class="favorite-shot-label">镜头 ${index + 1}</p>
-          <p class="favorite-shot-notes">${escapeHtml(frame.notes || "暂无镜头内容")}</p>
-          ${frame.dialogue ? `<p class="favorite-shot-notes">台词：${escapeHtml(frame.dialogue)}</p>` : ""}
-        </div>
-      </button>
-    `;
-  }).join("");
+  const refCount = (favorite.references || []).length;
+  return refCount > 0
+    ? `<p class="favorite-time meta">${refCount} 个参考素材</p>`
+    : '<p class="favorite-time meta">单镜头</p>';
 }
 
 async function removeFavoriteTag(favoriteId, tagValue) {
@@ -3204,20 +2977,10 @@ function getCurrentVideoApiKey() {
 }
 
 function getShotReferenceImages(shot) {
-  if (shot.type === "group") {
-    return (shot.referenceFrames || [])
-      .map((frame) => frame.imageDataUrl || "")
-      .filter(Boolean);
-  }
-
-  return shot.imageDataUrl ? [shot.imageDataUrl] : [];
+  return [shot.imageDataUrl, ...(shot.references || []).filter((r) => r.mediaType === "image").map((r) => r.url)].filter(Boolean);
 }
 
 function getShotCoverImage(shot) {
-  if (shot.type === "group") {
-    return getShotReferenceImages(shot)[0] || "";
-  }
-
   return shot.imageDataUrl || "";
 }
 
@@ -3600,11 +3363,9 @@ function exportFavorites(favoriteIds) {
 function exportAllPrompts() {
   const content = state.shots
     .map((shot, index) => {
-      const prefix = shot.type === "group" ? "Group" : "Shot";
-      const title = shot.title.trim() || `${prefix} ${String(index + 1).padStart(2, "0")}`;
+      const title = shot.title.trim() || `Shot ${String(index + 1).padStart(2, "0")}`;
       return [
         `# ${title}`,
-        `类型：${shot.type === "group" ? "镜头组" : "单镜头"}`,
         shot.directorNotes ? `导演讲戏：${shot.directorNotes}` : "",
         "",
         shot.currentPrompt.trim() || "暂无 Prompt",
@@ -3662,8 +3423,8 @@ async function importFavorites(file) {
     const favorite = normalizeFavorite(item);
     favorite.id = crypto.randomUUID();
     favorite.shotId = "";
-    favorite.referenceFrames = (favorite.referenceFrames || []).map((frame) => ({
-      ...frame,
+    favorite.references = (favorite.references || []).map((ref) => ({
+      ...ref,
       id: crypto.randomUUID(),
     }));
     return favorite;
