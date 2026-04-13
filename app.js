@@ -374,7 +374,12 @@ function bindGlobalEvents() {
     }
   });
 
-  window.addEventListener("scroll", closeMentionDropdown, true);
+  window.addEventListener("scroll", (e) => {
+    if (mentionDropdown.contains(e.target)) {
+      return;
+    }
+    closeMentionDropdown();
+  }, true);
 
   window.addEventListener("pagehide", () => {
     stopAllVideoPolling();
@@ -2292,7 +2297,7 @@ async function refreshVideoTaskStatus(shotId, options = {}) {
     }
 
     await persistState(result.message || getVideoStatusMessage(nextStatus));
-    render();
+    updateShotVideoUI(shotId);
   } catch (error) {
     stopVideoPolling(shotId);
     shot.videoTask = {
@@ -2302,7 +2307,7 @@ async function refreshVideoTaskStatus(shotId, options = {}) {
       updatedAt: new Date().toISOString(),
     };
     await persistState("视频任务状态刷新失败。");
-    render();
+    updateShotVideoUI(shotId);
     if (!silent) {
       setShotStatus(shotId, error.message || "获取视频任务状态失败。");
     }
@@ -3021,6 +3026,30 @@ function renderVideoResult({ shot, videoTaskLabel, generatedVideo, videoLastFram
   videoResultMeta.innerHTML = metaLines.join("<br>");
 }
 
+function updateShotVideoUI(shotId) {
+  const shot = getShotById(shotId);
+  if (!shot) {
+    return;
+  }
+
+  const card = document.querySelector(`.shot-card[data-shot-id="${shotId}"]`);
+  if (!card) {
+    return;
+  }
+
+  const videoTaskLabel = card.querySelector(".video-task-label");
+  const generatedVideo = card.querySelector(".generated-video");
+  const videoLastFrame = card.querySelector(".video-last-frame");
+  const videoResultEmpty = card.querySelector(".video-result-empty");
+  const videoResultMeta = card.querySelector(".video-result-meta");
+  const videoHistoryList = card.querySelector(".video-history-list");
+  const videoHistoryCount = card.querySelector(".video-history-count");
+
+  renderVideoResult({ shot, videoTaskLabel, generatedVideo, videoLastFrame, videoResultEmpty, videoResultMeta });
+  renderVideoHistory(videoHistoryList, shot);
+  videoHistoryCount.textContent = `${(shot.videoHistory || []).length} 条归档`;
+}
+
 function renderVideoHistory(container, shot) {
   container.innerHTML = "";
   const history = shot.videoHistory || [];
@@ -3560,7 +3589,8 @@ function setShotStatus(shotId, message) {
   bar.textContent = message;
   bar.hidden = false;
   clearTimeout(bar._timer);
-  bar._timer = setTimeout(() => { bar.hidden = true; }, 5000);
+  bar._timer = setTimeout(() => { bar.hidden = true; }, 8000);
+  bar.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 function reportRuntimeError(error, fallbackMessage) {
