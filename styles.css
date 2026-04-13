@@ -881,6 +881,16 @@ button:disabled {
   outline-offset: -8px;
 }
 
+.shot-status-bar {
+  padding: 8px 14px;
+  margin-bottom: 12px;
+  border-radius: 10px;
+  background: rgba(184, 90, 49, 0.08);
+  color: var(--accent-strong);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
 .shot-order {
   display: inline-flex;
   margin-bottom: 16px;

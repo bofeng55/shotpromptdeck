@@ -393,6 +393,7 @@ function render() {
   state.shots.forEach((shot, index) => {
     const fragment = elements.shotTemplate.content.cloneNode(true);
     const card = fragment.querySelector(".shot-card");
+    const shotStatusBar = fragment.querySelector(".shot-status-bar");
     const order = fragment.querySelector(".shot-order");
     const titleInput = fragment.querySelector(".shot-title");
     const directorNotesInput = fragment.querySelector(".director-notes");
@@ -1563,7 +1564,7 @@ function handleMentionInput(textarea, shot) {
     return;
   }
 
-  if (atIndex > 0 && !/[\s\n,，。.;；!！?？、（(：:]/.test(textBeforeCursor[atIndex - 1])) {
+  if (atIndex > 0 && /[a-zA-Z0-9]/.test(textBeforeCursor[atIndex - 1])) {
     closeMentionDropdown();
     return;
   }
@@ -1874,13 +1875,13 @@ async function handleGeneratePrompt(shotId, button) {
   }
 
   if (!getCurrentApiKey()) {
-    setStatus(`请先填写 ${getCurrentProviderConfig().apiKeyLabel}。`);
+    setShotStatus(shotId, `请先填写 ${getCurrentProviderConfig().apiKeyLabel}。`);
     return;
   }
 
   const imageDataUrls = getShotReferenceImages(shot);
   if (!imageDataUrls.length) {
-    setStatus("请先为这个镜头上传图片。");
+    setShotStatus(shotId, "请先为这个镜头上传图片。");
     return;
   }
 
@@ -1904,7 +1905,7 @@ async function handleGeneratePrompt(shotId, button) {
     await persistState("AI Prompt 已生成并存档。");
     render();
   } catch (error) {
-    setStatus(error.message || "生成 Prompt 失败。");
+    setShotStatus(shotId, error.message || "生成 Prompt 失败。");
   } finally {
     resetButtonLoading(button, originalLabel);
   }
@@ -1983,12 +1984,12 @@ async function handleRevisePrompt(shotId, feedback, feedbackInput, button) {
   }
 
   if (!getCurrentApiKey()) {
-    setStatus(`请先填写 ${getCurrentProviderConfig().apiKeyLabel}。`);
+    setShotStatus(shotId, `请先填写 ${getCurrentProviderConfig().apiKeyLabel}。`);
     return;
   }
 
   if (!feedback) {
-    setStatus("请先写下修改要求。");
+    setShotStatus(shotId, "请先写下修改要求。");
     return;
   }
 
@@ -2015,7 +2016,7 @@ async function handleRevisePrompt(shotId, feedback, feedbackInput, button) {
     await persistState("AI 已根据反馈修改 Prompt。");
     render();
   } catch (error) {
-    setStatus(error.message || "修改 Prompt 失败。");
+    setShotStatus(shotId, error.message || "修改 Prompt 失败。");
   } finally {
     resetButtonLoading(button, originalLabel);
   }
@@ -2029,7 +2030,7 @@ async function handleGenerateVideo(shotId, button) {
 
   const prompt = shot.currentPrompt.trim();
   if (!prompt) {
-    setStatus("请先生成或填写当前 Prompt，再提交视频任务。");
+    setShotStatus(shotId, "请先生成或填写当前 Prompt，再提交视频任务。");
     return;
   }
 
@@ -2088,7 +2089,7 @@ async function handleGenerateVideo(shotId, button) {
     render();
     startVideoPolling(shot.id);
   } catch (error) {
-    setStatus(error.message || "提交视频任务失败。");
+    setShotStatus(shotId, error.message || "提交视频任务失败。");
   } finally {
     resetButtonLoading(button, originalLabel);
   }
@@ -2144,7 +2145,7 @@ async function submitVideoTaskDirect(apiKey, payload) {
 async function handleRefreshVideoTask(shotId, button) {
   const shot = getShotById(shotId);
   if (!shot?.videoTask?.id) {
-    setStatus("这个镜头还没有已提交的视频任务。");
+    setShotStatus(shotId, "这个镜头还没有已提交的视频任务。");
     return;
   }
 
@@ -2303,7 +2304,7 @@ async function refreshVideoTaskStatus(shotId, options = {}) {
     await persistState("视频任务状态刷新失败。");
     render();
     if (!silent) {
-      setStatus(error.message || "获取视频任务状态失败。");
+      setShotStatus(shotId, error.message || "获取视频任务状态失败。");
     }
   }
 }
@@ -3547,6 +3548,19 @@ function getShotById(shotId) {
 
 function setStatus(message) {
   elements.statusText.textContent = message;
+}
+
+function setShotStatus(shotId, message) {
+  const card = document.querySelector(`.shot-card[data-shot-id="${shotId}"]`);
+  const bar = card?.querySelector(".shot-status-bar");
+  if (!bar) {
+    setStatus(message);
+    return;
+  }
+  bar.textContent = message;
+  bar.hidden = false;
+  clearTimeout(bar._timer);
+  bar._timer = setTimeout(() => { bar.hidden = true; }, 5000);
 }
 
 function reportRuntimeError(error, fallbackMessage) {
