@@ -1953,3 +1953,196 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 }
+
+/* 画质增强页面 */
+.enhance-workbench {
+  display: grid;
+  grid-template-columns: minmax(320px, 420px) 1fr;
+  gap: 20px;
+  align-items: start;
+}
+
+.enhance-form-card {
+  position: sticky;
+  top: 16px;
+}
+
+.enhance-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.enhance-hint {
+  margin: 4px 0 10px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.enhance-history {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 18px 20px;
+  box-shadow: var(--shadow);
+}
+
+.enhance-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.enhance-task-card {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.enhance-task-card.status-succeeded {
+  border-color: #a8c8a8;
+  background: #f4f8ef;
+}
+
+.enhance-task-card.status-failed,
+.enhance-task-card.status-expired {
+  border-color: #e3b5b5;
+  background: #faf1f1;
+}
+
+.enhance-task-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.enhance-task-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.enhance-task-meta {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.enhance-task-id {
+  font-family: "Space Grotesk", monospace;
+  font-size: 12px;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.enhance-task-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.enhance-task-source {
+  margin: 0;
+  font-size: 14px;
+  word-break: break-all;
+}
+
+.enhance-task-source a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.enhance-task-source a:hover {
+  text-decoration: underline;
+}
+
+.enhance-task-error {
+  margin: 0;
+  padding: 8px 10px;
+  background: rgba(179, 58, 58, 0.08);
+  border-radius: 10px;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.enhance-task-result {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.enhance-task-video {
+  width: 100%;
+  max-height: 360px;
+  border-radius: 10px;
+  background: #000;
+}
+
+.enhance-task-result-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.enhance-task-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--surface-3);
+  color: var(--text);
+  border: 1px solid var(--line);
+}
+
+.status-chip.status-queued {
+  background: #eee7d6;
+  color: #7b6628;
+}
+
+.status-chip.status-running {
+  background: #dfe9f5;
+  color: #2c578f;
+}
+
+.status-chip.status-succeeded {
+  background: #dcebd3;
+  color: #3e6b2a;
+}
+
+.status-chip.status-failed,
+.status-chip.status-expired {
+  background: #f0d4d4;
+  color: #8d2d2d;
+}
+
+@media (max-width: 960px) {
+  .enhance-workbench {
+    grid-template-columns: 1fr;
+  }
+
+  .enhance-form-card {
+    position: static;
+  }
+
+  .enhance-grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -9,6 +9,10 @@ const VIDEO_POLL_INTERVAL_MS = 10000;
 const VIDEO_BASE_URL = "/api/video-tasks";
 const DEFAULT_VIDEO_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
 const DEFAULT_VIDEO_MODEL = "doubao-seedance-2-0-260128";
+const ENHANCE_POLL_INTERVAL_MS = 15000;
+const ENHANCE_BASE_URL = "/api/enhance-video";
+const ENHANCE_TASK_BASE_URL = "/api/enhance-tasks";
+const DEFAULT_ENHANCE_BASE_URL = "https://amk.cn-beijing.volces.com/api/v1";
 const SYSTEM_PROMPT = "你是专业的视频生成提示词导演，只输出最终可直接使用的中文视频生成 Prompt，不要解释。";
 const PROVIDER_CONFIGS = {
   gemini: {
@@ -54,6 +58,10 @@ const defaultState = {
       baseUrl: DEFAULT_VIDEO_BASE_URL,
       model: DEFAULT_VIDEO_MODEL,
     },
+    mediaKitApiKey: "",
+    mediaKitProvider: {
+      baseUrl: DEFAULT_ENHANCE_BASE_URL,
+    },
     customProvider: {
       label: "自定义 API",
       baseUrl: "",
@@ -65,12 +73,14 @@ const defaultState = {
   shots: [],
   favorites: [],
   subjects: [],
+  enhanceTasks: [],
 };
 
 const elements = {
   workspaceTab: document.querySelector("#workspaceTab"),
   subjectsTab: document.querySelector("#subjectsTab"),
   favoritesTab: document.querySelector("#favoritesTab"),
+  enhanceTab: document.querySelector("#enhanceTab"),
   settingsButton: document.querySelector("#settingsButton"),
   heroTitleLine1: document.querySelector("#heroTitleLine1"),
   heroTitleLine2: document.querySelector("#heroTitleLine2"),
@@ -96,6 +106,24 @@ const elements = {
   favoritesView: document.querySelector("#favoritesView"),
   workspaceSummary: document.querySelector("#workspaceSummary"),
   favoritesContainer: document.querySelector("#favoritesContainer"),
+  enhanceView: document.querySelector("#enhanceView"),
+  enhanceVideoUrl: document.querySelector("#enhanceVideoUrl"),
+  enhanceScene: document.querySelector("#enhanceScene"),
+  enhanceToolVersion: document.querySelector("#enhanceToolVersion"),
+  enhanceResolutionMode: document.querySelector("#enhanceResolutionMode"),
+  enhanceResolutionPresetField: document.querySelector("#enhanceResolutionPresetField"),
+  enhanceResolutionLimitField: document.querySelector("#enhanceResolutionLimitField"),
+  enhanceResolution: document.querySelector("#enhanceResolution"),
+  enhanceResolutionLimit: document.querySelector("#enhanceResolutionLimit"),
+  enhanceFps: document.querySelector("#enhanceFps"),
+  enhanceSubmitButton: document.querySelector("#enhanceSubmitButton"),
+  enhanceRefreshAllButton: document.querySelector("#enhanceRefreshAllButton"),
+  enhanceClearFinishedButton: document.querySelector("#enhanceClearFinishedButton"),
+  enhanceTaskList: document.querySelector("#enhanceTaskList"),
+  enhanceTaskCount: document.querySelector("#enhanceTaskCount"),
+  enhanceSucceededCount: document.querySelector("#enhanceSucceededCount"),
+  enhanceStatusText: document.querySelector("#enhanceStatusText"),
+  enhanceHistoryMeta: document.querySelector("#enhanceHistoryMeta"),
   shotCount: document.querySelector("#shotCount"),
   historyCount: document.querySelector("#historyCount"),
   chatCount: document.querySelector("#chatCount"),
@@ -133,6 +161,7 @@ let state = structuredClone(defaultState);
 let dbPromise;
 let persistTimer = null;
 const videoPollTimers = new Map();
+const enhancePollTimers = new Map();
 const mentionDropdown = document.createElement("div");
 mentionDropdown.className = "mention-dropdown";
 mentionDropdown.hidden = true;
@@ -149,6 +178,16 @@ const uiState = {
   isFavoriteBatchMode: false,
   isEditingApiKey: false,
   isEditingVideoApiKey: false,
+  isEditingMediaKitApiKey: false,
+  enhanceForm: {
+    videoUrl: "",
+    scene: "aigc",
+    toolVersion: "standard",
+    resolutionMode: "preset",
+    resolution: "1080p",
+    resolutionLimit: "",
+    fps: "",
+  },
 };
 
 bootstrap();
@@ -165,6 +204,7 @@ async function bootstrap() {
 
   render();
   resumePendingVideoTasks();
+  resumePendingEnhanceTasks();
 }
 
 function bindGlobalEvents() {
@@ -182,9 +222,15 @@ function bindGlobalEvents() {
     setCurrentView("favorites");
   });
 
+  elements.enhanceTab.addEventListener("click", () => {
+    setCurrentView("enhance");
+  });
+
   elements.settingsButton.addEventListener("click", () => {
     openSettingsModal();
   });
+
+  bindEnhanceEvents();
 
   elements.favoritesSearch.addEventListener("input", (event) => {
     uiState.favoriteSearchTerm = event.target.value.trim().toLowerCase();
@@ -620,14 +666,17 @@ function renderPageChrome() {
   const isWorkspace = currentView === "workspace";
   const isSubjects = currentView === "subjects";
   const isFavorites = currentView === "favorites";
+  const isEnhance = currentView === "enhance";
   elements.workspaceTab.classList.toggle("is-active", isWorkspace);
   elements.subjectsTab.classList.toggle("is-active", isSubjects);
   elements.favoritesTab.classList.toggle("is-active", isFavorites);
+  elements.enhanceTab.classList.toggle("is-active", isEnhance);
   elements.workspaceControls.hidden = !isWorkspace;
   elements.workspaceSummary.hidden = !isWorkspace;
   elements.workspaceView.hidden = !isWorkspace;
   elements.subjectsView.hidden = !isSubjects;
   elements.favoritesView.hidden = !isFavorites;
+  elements.enhanceView.hidden = !isEnhance;
   elements.favoritesBulkBar.hidden = !isFavorites || !uiState.isFavoriteBatchMode;
   elements.favoritesSearch.value = uiState.favoriteSearchTerm;
   populateFavoriteTagFilter();
@@ -651,6 +700,15 @@ function renderPageChrome() {
     elements.heroTitleLine2.textContent = "收藏夹";
     elements.heroSubtitleLine1.textContent = "收藏你需要反复查看和复用的镜头内容，";
     elements.heroSubtitleLine2.textContent = "下次打开网页时，仍可在这里继续查看。";
+    return;
+  }
+
+  if (isEnhance) {
+    elements.heroTitleLine1.textContent = "画质";
+    elements.heroTitleLine2.textContent = "增强";
+    elements.heroSubtitleLine1.textContent = "基于 AI MediaKit 对视频进行超分、插帧、色彩与降噪增强，";
+    elements.heroSubtitleLine2.textContent = "支持 AIGC、短剧、UGC、老片修复四种预设场景。";
+    renderEnhanceView();
     return;
   }
 
@@ -2901,6 +2959,68 @@ function normalizeVideoProvider(input) {
   return provider;
 }
 
+function createDefaultMediaKitProvider() {
+  return {
+    baseUrl: DEFAULT_ENHANCE_BASE_URL,
+  };
+}
+
+function normalizeMediaKitProvider(input) {
+  const provider = {
+    ...createDefaultMediaKitProvider(),
+    ...(input || {}),
+  };
+  provider.baseUrl = String(provider.baseUrl || DEFAULT_ENHANCE_BASE_URL).trim() || DEFAULT_ENHANCE_BASE_URL;
+  return provider;
+}
+
+function getCurrentMediaKitApiKey() {
+  return String(state.settings.mediaKitApiKey || "").trim();
+}
+
+function normalizeEnhanceTask(input) {
+  const now = new Date().toISOString();
+  return {
+    id: input?.id || crypto.randomUUID(),
+    taskId: String(input?.taskId || "").trim(),
+    status: normalizeVideoStatus(input?.status || "queued"),
+    videoUrl: String(input?.videoUrl || ""),
+    error: String(input?.error || ""),
+    origin: String(input?.origin || ""),
+    requestSummary: String(input?.requestSummary || ""),
+    params: {
+      video_url: String(input?.params?.video_url || ""),
+      scene: String(input?.params?.scene || ""),
+      tool_version: String(input?.params?.tool_version || ""),
+      resolution: String(input?.params?.resolution || ""),
+      resolution_limit: Number.isFinite(Number(input?.params?.resolution_limit))
+        ? Number(input.params.resolution_limit)
+        : null,
+      fps: Number.isFinite(Number(input?.params?.fps)) ? Number(input.params.fps) : null,
+    },
+    result: {
+      resolution: String(input?.result?.resolution || ""),
+      toolVersion: String(input?.result?.toolVersion || ""),
+      duration: Number.isFinite(Number(input?.result?.duration)) ? Number(input.result.duration) : null,
+      fps: Number.isFinite(Number(input?.result?.fps)) ? Number(input.result.fps) : null,
+      expiresAt: Number.isFinite(Number(input?.result?.expiresAt)) ? Number(input.result.expiresAt) : null,
+      finishedAt: Number.isFinite(Number(input?.result?.finishedAt)) ? Number(input.result.finishedAt) : null,
+    },
+    createdAt: String(input?.createdAt || now),
+    updatedAt: String(input?.updatedAt || now),
+  };
+}
+
+function summarizeEnhanceParams(params) {
+  return [
+    params.scene ? `场景 ${params.scene}` : "",
+    params.tool_version ? `版本 ${params.tool_version}` : "",
+    params.resolution ? `分辨率 ${params.resolution}` : "",
+    params.resolution_limit ? `短边 ${params.resolution_limit}` : "",
+    params.fps ? `帧率 ${params.fps}fps` : "",
+  ].filter(Boolean).join(" · ");
+}
+
 function normalizeVideoStatus(status) {
   const raw = String(status || "").trim().toLowerCase();
   if (!raw) {
@@ -3213,6 +3333,7 @@ function normalizeState(input) {
   const shots = Array.isArray(input.shots) ? input.shots : [];
   const favorites = Array.isArray(input.favorites) ? input.favorites : [];
   const subjects = Array.isArray(input.subjects) ? input.subjects : [];
+  const enhanceTasks = Array.isArray(input.enhanceTasks) ? input.enhanceTasks : [];
   return {
     settings: {
       ...defaultState.settings,
@@ -3222,11 +3343,14 @@ function normalizeState(input) {
       apiKeys: normalizeApiKeys(input?.settings),
       videoApiKey: String(input?.settings?.videoApiKey || "").trim(),
       videoProvider: normalizeVideoProvider(input?.settings?.videoProvider),
+      mediaKitApiKey: String(input?.settings?.mediaKitApiKey || "").trim(),
+      mediaKitProvider: normalizeMediaKitProvider(input?.settings?.mediaKitProvider),
       customProvider: normalizeCustomProvider(input?.settings?.customProvider, input?.settings?.model),
     },
     shots: shots.length ? shots.map(normalizeShot) : [createShot()],
     favorites: favorites.map(normalizeFavorite),
     subjects: subjects.map(normalizeSubject),
+    enhanceTasks: enhanceTasks.map(normalizeEnhanceTask),
   };
 }
 
@@ -3621,6 +3745,7 @@ function formatTime(isoString) {
 function openSettingsModal() {
   uiState.isEditingApiKey = !getCurrentApiKey();
   uiState.isEditingVideoApiKey = !getCurrentVideoApiKey();
+  uiState.isEditingMediaKitApiKey = !getCurrentMediaKitApiKey();
   renderSettingsModal();
   elements.settingsModal.hidden = false;
 }
@@ -3628,20 +3753,26 @@ function openSettingsModal() {
 function closeSettingsModal() {
   uiState.isEditingApiKey = false;
   uiState.isEditingVideoApiKey = false;
+  uiState.isEditingMediaKitApiKey = false;
   elements.settingsModal.hidden = true;
 }
 
 function renderSettingsModal() {
   const provider = getCurrentProviderConfig();
   const videoProvider = normalizeVideoProvider(state.settings.videoProvider);
+  const mediaKitProvider = normalizeMediaKitProvider(state.settings.mediaKitProvider);
   const currentApiKey = getCurrentApiKey();
   const currentVideoApiKey = getCurrentVideoApiKey();
+  const currentMediaKitApiKey = getCurrentMediaKitApiKey();
   const hasApiKey = Boolean(currentApiKey);
   const hasVideoApiKey = Boolean(currentVideoApiKey);
+  const hasMediaKitApiKey = Boolean(currentMediaKitApiKey);
   const shouldEditApiKey = uiState.isEditingApiKey || !hasApiKey;
   const shouldEditVideoApiKey = uiState.isEditingVideoApiKey || !hasVideoApiKey;
+  const shouldEditMediaKitApiKey = uiState.isEditingMediaKitApiKey || !hasMediaKitApiKey;
   const maskedApiKey = hasApiKey ? maskApiKey(currentApiKey) : "未设置";
   const maskedVideoApiKey = hasVideoApiKey ? maskApiKey(currentVideoApiKey) : "未设置（也可以直接用服务端环境变量 ARK_API_KEY）";
+  const maskedMediaKitApiKey = hasMediaKitApiKey ? maskApiKey(currentMediaKitApiKey) : "未设置（也可以直接用服务端环境变量 AMK_API_KEY）";
   const providerChipsMarkup = Object.values(PROVIDER_CONFIGS)
     .map((item) => {
       const isActive = provider.id === item.id;
@@ -3753,6 +3884,39 @@ function renderSettingsModal() {
             <p class="meta">当前版本默认按火山方舟 Seedance 异步任务接口创建任务，并通过服务端 /api/video-tasks 代理提交与查询。</p>
           </div>
         </section>
+        <section class="prompt-panel settings-panel">
+          <div class="favorite-block">
+            <h3>AI MediaKit API Key（画质增强）</h3>
+            ${shouldEditMediaKitApiKey ? `
+              <label class="field compact">
+                <span>可本地保存，也可留空并改用服务端环境变量 AMK_API_KEY</span>
+                <input class="settings-mediakit-api-key-input" type="password" placeholder="输入 AI MediaKit API Key" autocomplete="off">
+              </label>
+              <div class="card-actions">
+                <button class="secondary-button settings-save-mediakit-api-button" type="button">保存 MediaKit Key</button>
+                ${hasMediaKitApiKey ? '<button class="ghost-button settings-cancel-mediakit-api-button" type="button">取消</button>' : ""}
+              </div>
+            ` : `
+              <div class="secure-field">
+                <span class="secure-label">已加密显示</span>
+                <div class="secure-value secure-mediakit-value" tabindex="0">${escapeHtml(maskedMediaKitApiKey)}</div>
+              </div>
+              <div class="card-actions">
+                <button class="ghost-button settings-edit-mediakit-api-button" type="button">重新输入</button>
+              </div>
+            `}
+          </div>
+        </section>
+        <section class="prompt-panel settings-panel">
+          <div class="favorite-block">
+            <h3>画质增强服务</h3>
+            <label class="field compact">
+              <span>MediaKit API Base URL</span>
+              <input class="settings-mediakit-base-url-input" type="text" value="${escapeHtml(mediaKitProvider.baseUrl)}" placeholder="${escapeHtml(DEFAULT_ENHANCE_BASE_URL)}">
+            </label>
+            <p class="meta">默认调用 AI MediaKit 画质增强接口（提交 <code>/tools/enhance-video</code>，查询 <code>/tasks/{task_id}</code>）。未填 API Key 时，会通过服务端 /api/enhance-video 代理。</p>
+          </div>
+        </section>
       </div>
     </article>
   `;
@@ -3835,6 +3999,15 @@ function renderSettingsModal() {
     queuePersistState("视频模型设置已更新。");
   });
 
+  const mediaKitBaseUrlInput = elements.settingsModalContent.querySelector(".settings-mediakit-base-url-input");
+  mediaKitBaseUrlInput?.addEventListener("input", (event) => {
+    state.settings.mediaKitProvider = {
+      ...normalizeMediaKitProvider(state.settings.mediaKitProvider),
+      baseUrl: event.target.value,
+    };
+    queuePersistState("画质增强 API 地址已更新。");
+  });
+
   if (shouldEditApiKey) {
     const apiInput = elements.settingsModalContent.querySelector(".settings-api-key-input");
     const saveButton = elements.settingsModalContent.querySelector(".settings-save-api-button");
@@ -3881,6 +4054,24 @@ function renderSettingsModal() {
     });
   }
 
+  if (shouldEditMediaKitApiKey) {
+    const mediaKitApiInput = elements.settingsModalContent.querySelector(".settings-mediakit-api-key-input");
+    const saveMediaKitButton = elements.settingsModalContent.querySelector(".settings-save-mediakit-api-button");
+    const cancelMediaKitButton = elements.settingsModalContent.querySelector(".settings-cancel-mediakit-api-button");
+
+    saveMediaKitButton?.addEventListener("click", () => {
+      state.settings.mediaKitApiKey = mediaKitApiInput.value.trim();
+      uiState.isEditingMediaKitApiKey = false;
+      queuePersistState(state.settings.mediaKitApiKey ? "AI MediaKit API Key 已本地保存。" : "AI MediaKit API Key 已清空，将改用服务端环境变量。");
+      renderSettingsModal();
+    });
+
+    cancelMediaKitButton?.addEventListener("click", () => {
+      uiState.isEditingMediaKitApiKey = false;
+      renderSettingsModal();
+    });
+  }
+
   elements.settingsModalContent.querySelectorAll(".secure-value").forEach((secureValue) => {
     ["copy", "cut", "dragstart", "contextmenu"].forEach((eventName) => {
       secureValue.addEventListener(eventName, (event) => {
@@ -3899,6 +4090,11 @@ function renderSettingsModal() {
 
   elements.settingsModalContent.querySelector(".settings-edit-video-api-button")?.addEventListener("click", () => {
     uiState.isEditingVideoApiKey = true;
+    renderSettingsModal();
+  });
+
+  elements.settingsModalContent.querySelector(".settings-edit-mediakit-api-button")?.addEventListener("click", () => {
+    uiState.isEditingMediaKitApiKey = true;
     renderSettingsModal();
   });
 }
@@ -4131,6 +4327,360 @@ function resetButtonLoading(button, fallbackLabel) {
   button.disabled = false;
   button.textContent = button.dataset.originalLabel || fallbackLabel;
   delete button.dataset.originalLabel;
+}
+
+function bindEnhanceEvents() {
+  if (!elements.enhanceView) {
+    return;
+  }
+
+  const form = uiState.enhanceForm;
+
+  elements.enhanceVideoUrl.addEventListener("input", (event) => {
+    form.videoUrl = event.target.value;
+  });
+  elements.enhanceScene.addEventListener("change", (event) => {
+    form.scene = event.target.value;
+  });
+  elements.enhanceToolVersion.addEventListener("change", (event) => {
+    form.toolVersion = event.target.value;
+  });
+  elements.enhanceResolutionMode.addEventListener("change", (event) => {
+    form.resolutionMode = event.target.value;
+    updateEnhanceResolutionFields();
+  });
+  elements.enhanceResolution.addEventListener("change", (event) => {
+    form.resolution = event.target.value;
+  });
+  elements.enhanceResolutionLimit.addEventListener("input", (event) => {
+    form.resolutionLimit = event.target.value;
+  });
+  elements.enhanceFps.addEventListener("input", (event) => {
+    form.fps = event.target.value;
+  });
+
+  elements.enhanceSubmitButton.addEventListener("click", (event) => {
+    handleSubmitEnhanceTask(event.currentTarget);
+  });
+
+  elements.enhanceRefreshAllButton.addEventListener("click", async () => {
+    const pending = state.enhanceTasks.filter((task) => !isVideoTaskFinished(task.status));
+    if (!pending.length) {
+      setEnhanceStatus("所有任务都已经完成，没有需要刷新的。");
+      return;
+    }
+    setEnhanceStatus(`正在刷新 ${pending.length} 个任务状态...`);
+    await Promise.all(pending.map((task) => refreshEnhanceTaskStatus(task.id, { silent: true })));
+  });
+
+  elements.enhanceClearFinishedButton.addEventListener("click", async () => {
+    const keep = state.enhanceTasks.filter((task) => !isVideoTaskFinished(task.status));
+    if (keep.length === state.enhanceTasks.length) {
+      setEnhanceStatus("暂无已完成 / 失败任务可清理。");
+      return;
+    }
+    state.enhanceTasks = keep;
+    await persistState("已清空已完成的增强任务。");
+    renderEnhanceView();
+  });
+}
+
+function updateEnhanceResolutionFields() {
+  const mode = uiState.enhanceForm.resolutionMode;
+  elements.enhanceResolutionPresetField.hidden = mode !== "preset";
+  elements.enhanceResolutionLimitField.hidden = mode !== "limit";
+}
+
+function setEnhanceStatus(message) {
+  if (elements.enhanceStatusText) {
+    elements.enhanceStatusText.textContent = message;
+  }
+  setStatus(message);
+}
+
+function renderEnhanceView() {
+  const form = uiState.enhanceForm;
+  elements.enhanceVideoUrl.value = form.videoUrl || "";
+  elements.enhanceScene.value = form.scene || "";
+  elements.enhanceToolVersion.value = form.toolVersion || "standard";
+  elements.enhanceResolutionMode.value = form.resolutionMode || "preset";
+  elements.enhanceResolution.value = form.resolution || "1080p";
+  elements.enhanceResolutionLimit.value = form.resolutionLimit || "";
+  elements.enhanceFps.value = form.fps || "";
+  updateEnhanceResolutionFields();
+
+  const tasks = [...state.enhanceTasks].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+  elements.enhanceTaskCount.textContent = String(state.enhanceTasks.length);
+  elements.enhanceSucceededCount.textContent = String(state.enhanceTasks.filter((t) => t.status === "succeeded").length);
+  elements.enhanceHistoryMeta.textContent = tasks.length ? `共 ${tasks.length} 条记录` : "暂无任务";
+
+  const container = elements.enhanceTaskList;
+  container.innerHTML = "";
+
+  if (!tasks.length) {
+    container.innerHTML = '<div class="empty-state">还没有提交过画质增强任务。填写表单后点击"提交画质增强任务"即可开始。</div>';
+    return;
+  }
+
+  tasks.forEach((task) => {
+    const card = document.createElement("article");
+    card.className = `enhance-task-card status-${task.status}`;
+    card.dataset.enhanceTaskId = task.id;
+
+    const finished = isVideoTaskFinished(task.status);
+    const statusLabel = getVideoStatusText(task.status);
+    const params = task.params || {};
+    const result = task.result || {};
+    const summary = task.requestSummary || summarizeEnhanceParams(params) || "—";
+
+    card.innerHTML = `
+      <header class="enhance-task-header">
+        <div class="enhance-task-status">
+          <span class="status-chip status-${escapeHtml(task.status)}">${escapeHtml(statusLabel)}</span>
+          <span class="meta">提交于 ${escapeHtml(formatTime(task.createdAt))}</span>
+        </div>
+        <div class="enhance-task-meta">
+          <span class="meta">${escapeHtml(summary)}</span>
+          ${task.taskId ? `<span class="meta enhance-task-id">ID: ${escapeHtml(task.taskId)}</span>` : ""}
+        </div>
+      </header>
+      <div class="enhance-task-body">
+        <p class="enhance-task-source">
+          <span class="meta">源视频：</span>
+          <a href="${escapeHtml(params.video_url || "#")}" target="_blank" rel="noopener noreferrer">${escapeHtml(params.video_url || "—")}</a>
+        </p>
+        ${task.error ? `<p class="enhance-task-error">${escapeHtml(task.error)}</p>` : ""}
+        ${task.videoUrl ? `
+          <div class="enhance-task-result">
+            <video class="enhance-task-video" src="${escapeHtml(task.videoUrl)}" controls playsinline></video>
+            <div class="enhance-task-result-meta">
+              ${result.resolution ? `<span class="meta">输出 ${escapeHtml(result.resolution)}</span>` : ""}
+              ${result.toolVersion ? `<span class="meta">${escapeHtml(result.toolVersion)}</span>` : ""}
+              ${Number.isFinite(Number(result.duration)) ? `<span class="meta">时长 ${Number(result.duration).toFixed(2)}s</span>` : ""}
+              ${Number.isFinite(Number(result.fps)) ? `<span class="meta">${Number(result.fps).toFixed(2)} fps</span>` : ""}
+              ${result.expiresAt ? `<span class="meta">链接有效期至 ${escapeHtml(formatUnixTime(result.expiresAt))}</span>` : ""}
+            </div>
+          </div>
+        ` : ""}
+      </div>
+      <footer class="enhance-task-footer card-actions">
+        ${task.videoUrl ? `<a class="ghost-button" href="${escapeHtml(task.videoUrl)}" target="_blank" rel="noopener noreferrer" download>下载增强视频</a>` : ""}
+        ${task.videoUrl ? `<button class="ghost-button enhance-copy-url-button" type="button">复制结果链接</button>` : ""}
+        ${params.video_url ? `<button class="ghost-button enhance-reuse-button" type="button">用同一条源视频重建</button>` : ""}
+        <button class="ghost-button enhance-refresh-button" type="button" ${finished ? "disabled" : ""}>${finished ? "已结束" : "刷新状态"}</button>
+        <button class="ghost-button enhance-delete-button danger" type="button">删除</button>
+      </footer>
+    `;
+
+    card.querySelector(".enhance-refresh-button")?.addEventListener("click", () => {
+      refreshEnhanceTaskStatus(task.id, { silent: false });
+    });
+    card.querySelector(".enhance-delete-button")?.addEventListener("click", async () => {
+      state.enhanceTasks = state.enhanceTasks.filter((t) => t.id !== task.id);
+      stopEnhancePolling(task.id);
+      await persistState("已删除增强任务。");
+      renderEnhanceView();
+    });
+    card.querySelector(".enhance-copy-url-button")?.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(task.videoUrl);
+        setEnhanceStatus("已复制结果链接到剪贴板。");
+      } catch (error) {
+        setEnhanceStatus("复制失败，请手动选中链接。");
+      }
+    });
+    card.querySelector(".enhance-reuse-button")?.addEventListener("click", () => {
+      const form = uiState.enhanceForm;
+      form.videoUrl = params.video_url || "";
+      form.scene = params.scene || form.scene;
+      form.toolVersion = params.tool_version || form.toolVersion;
+      if (params.resolution) {
+        form.resolutionMode = "preset";
+        form.resolution = params.resolution;
+      } else if (params.resolution_limit) {
+        form.resolutionMode = "limit";
+        form.resolutionLimit = String(params.resolution_limit);
+      }
+      if (Number.isFinite(Number(params.fps))) {
+        form.fps = String(params.fps);
+      }
+      renderEnhanceView();
+      elements.enhanceVideoUrl.focus();
+    });
+
+    container.append(card);
+  });
+}
+
+function formatUnixTime(seconds) {
+  if (!Number.isFinite(Number(seconds))) return "";
+  return formatTime(new Date(Number(seconds) * 1000).toISOString());
+}
+
+async function handleSubmitEnhanceTask(button) {
+  const form = uiState.enhanceForm;
+  const videoUrl = String(form.videoUrl || "").trim();
+  if (!videoUrl) {
+    setEnhanceStatus("请先填写源视频 URL。");
+    return;
+  }
+  if (!/^https?:\/\//i.test(videoUrl)) {
+    setEnhanceStatus("视频 URL 必须是公网可访问的 http(s) 地址。");
+    return;
+  }
+
+  const params = {
+    video_url: videoUrl,
+    scene: form.scene || "",
+    tool_version: form.toolVersion || "",
+  };
+
+  if (form.resolutionMode === "preset") {
+    params.resolution = form.resolution || "";
+  } else if (form.resolutionMode === "limit") {
+    const limit = Number.parseInt(form.resolutionLimit, 10);
+    if (!Number.isFinite(limit) || limit < 64 || limit > 2160) {
+      setEnhanceStatus("短边像素值需要在 64 到 2160 之间。");
+      return;
+    }
+    params.resolution_limit = limit;
+  }
+
+  if (form.fps !== "" && form.fps !== null && form.fps !== undefined) {
+    const fps = Number.parseInt(form.fps, 10);
+    if (!Number.isFinite(fps) || fps < 1 || fps > 120) {
+      setEnhanceStatus("帧率范围应为 1 ~ 120。");
+      return;
+    }
+    params.fps = fps;
+  }
+
+  const originalLabel = button.textContent;
+  try {
+    setButtonLoading(button, "提交任务中...");
+    const apiKey = getCurrentMediaKitApiKey();
+    const baseUrl = normalizeMediaKitProvider(state.settings.mediaKitProvider).baseUrl;
+
+    let response;
+    try {
+      response = await fetch(ENHANCE_BASE_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          apiKey,
+          baseUrl,
+          ...params,
+        }),
+      });
+    } catch (fetchError) {
+      throw new Error(
+        "无法连接到 /api/enhance-video。请确认本地开发服务器已经重启（node dev-server.js），"
+          + "或部署环境下已经包含画质增强接口。" + (fetchError?.message ? `（${fetchError.message}）` : "")
+      );
+    }
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(result.error || `提交画质增强任务失败（${response.status}）`);
+    }
+    const taskId = String(result.taskId || "");
+    const taskStatus = normalizeVideoStatus(result.status || "queued");
+    const origin = result.origin || "ai-mediakit";
+    const requestSummary = result.requestSummary || summarizeEnhanceParams(params);
+
+    const task = normalizeEnhanceTask({
+      taskId,
+      status: taskStatus,
+      origin,
+      requestSummary,
+      params,
+    });
+    state.enhanceTasks.unshift(task);
+    await persistState("画质增强任务已提交，正在轮询结果。");
+    renderEnhanceView();
+    startEnhancePolling(task.id);
+  } catch (error) {
+    setEnhanceStatus(error.message || "提交画质增强任务失败。");
+  } finally {
+    resetButtonLoading(button, originalLabel);
+  }
+}
+
+async function refreshEnhanceTaskStatus(taskLocalId, options = {}) {
+  const { silent = true } = options;
+  const task = state.enhanceTasks.find((t) => t.id === taskLocalId);
+  if (!task || !task.taskId) return;
+
+  try {
+    const apiKey = getCurrentMediaKitApiKey();
+    const baseUrl = normalizeMediaKitProvider(state.settings.mediaKitProvider).baseUrl;
+    const url = `${ENHANCE_TASK_BASE_URL}/${encodeURIComponent(task.taskId)}?baseUrl=${encodeURIComponent(baseUrl)}`;
+    const response = await fetch(url, {
+      headers: { "x-mediakit-api-key": apiKey || "" },
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(result.error || `刷新画质增强任务失败（${response.status}）`);
+    }
+
+    const nextStatus = normalizeVideoStatus(result.status || task.status);
+    task.status = nextStatus;
+    task.videoUrl = String(result.videoUrl || task.videoUrl || "");
+    task.error = String(result.error || "");
+    task.updatedAt = new Date().toISOString();
+    task.result = {
+      resolution: String(result.resolution || task.result?.resolution || ""),
+      toolVersion: String(result.toolVersion || task.result?.toolVersion || ""),
+      duration: Number.isFinite(Number(result.duration)) ? Number(result.duration) : task.result?.duration || null,
+      fps: Number.isFinite(Number(result.fps)) ? Number(result.fps) : task.result?.fps || null,
+      expiresAt: Number.isFinite(Number(result.expiresAt)) ? Number(result.expiresAt) : task.result?.expiresAt || null,
+      finishedAt: Number.isFinite(Number(result.finishedAt)) ? Number(result.finishedAt) : task.result?.finishedAt || null,
+    };
+
+    if (isVideoTaskFinished(nextStatus)) {
+      stopEnhancePolling(task.id);
+    }
+
+    await persistState(result.message || getVideoStatusMessage(nextStatus));
+    renderEnhanceView();
+  } catch (error) {
+    stopEnhancePolling(task.id);
+    task.status = "failed";
+    task.error = error.message || "获取画质增强任务状态失败。";
+    task.updatedAt = new Date().toISOString();
+    await persistState("画质增强任务状态刷新失败。");
+    renderEnhanceView();
+    if (!silent) {
+      setEnhanceStatus(error.message || "获取画质增强任务状态失败。");
+    }
+  }
+}
+
+function startEnhancePolling(taskLocalId) {
+  stopEnhancePolling(taskLocalId);
+  const timerId = window.setInterval(async () => {
+    const task = state.enhanceTasks.find((t) => t.id === taskLocalId);
+    if (!task?.taskId || isVideoTaskFinished(task.status)) {
+      stopEnhancePolling(taskLocalId);
+      return;
+    }
+    await refreshEnhanceTaskStatus(taskLocalId);
+  }, ENHANCE_POLL_INTERVAL_MS);
+  enhancePollTimers.set(taskLocalId, timerId);
+}
+
+function stopEnhancePolling(taskLocalId) {
+  const timerId = enhancePollTimers.get(taskLocalId);
+  if (!timerId) return;
+  window.clearInterval(timerId);
+  enhancePollTimers.delete(taskLocalId);
+}
+
+function resumePendingEnhanceTasks() {
+  state.enhanceTasks.forEach((task) => {
+    if (task.taskId && ["queued", "running"].includes(normalizeVideoStatus(task.status))) {
+      startEnhancePolling(task.id);
+    }
+  });
 }
 
 function escapeHtml(input) {

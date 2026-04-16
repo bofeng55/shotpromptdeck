@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./styles.css?v=20260413a">
+  <link rel="stylesheet" href="./styles.css?v=20260417b">
 </head>
 <body>
   <div class="shell">
@@ -16,6 +16,7 @@
         <button id="workspaceTab" class="view-tab is-active" type="button">工作台</button>
         <button id="subjectsTab" class="view-tab" type="button">主体库</button>
         <button id="favoritesTab" class="view-tab" type="button">收藏夹</button>
+        <button id="enhanceTab" class="view-tab" type="button">画质增强</button>
       </nav>
       <button id="settingsButton" class="ghost-button settings-trigger" type="button">模型与 API 设置</button>
     </div>
@@ -162,6 +163,91 @@
           </div>
         </section>
         <section id="favoritesContainer" class="favorites-grid"></section>
+      </section>
+
+      <section id="enhanceView" hidden>
+        <section class="summary-bar">
+          <div>
+            <strong id="enhanceTaskCount">0</strong>
+            <span>条增强任务</span>
+          </div>
+          <div>
+            <strong id="enhanceSucceededCount">0</strong>
+            <span>已完成</span>
+          </div>
+          <p id="enhanceStatusText" class="status-text">AI MediaKit 画质增强异步任务，提交后可在下方查看进度。</p>
+        </section>
+        <section class="enhance-workbench">
+          <article class="shot-card enhance-form-card">
+            <div class="panel-header">
+              <h2>新建增强任务</h2>
+              <span class="meta">支持公网 HTTP/HTTPS 视频 URL · 输入最高 2K</span>
+            </div>
+            <label class="field">
+              <span>视频 URL（video_url）</span>
+              <input id="enhanceVideoUrl" type="text" placeholder="https://example.com/source.mp4">
+            </label>
+            <div class="enhance-grid">
+              <label class="field compact">
+                <span>场景（scene）</span>
+                <select id="enhanceScene">
+                  <option value="">未指定</option>
+                  <option value="aigc" selected>AIGC · 大模型生成视频</option>
+                  <option value="short_series">short_series · 短剧</option>
+                  <option value="ugc">ugc · UGC 短视频</option>
+                  <option value="old_film">old_film · 老片修复</option>
+                </select>
+              </label>
+              <label class="field compact">
+                <span>版本（tool_version）</span>
+                <select id="enhanceToolVersion">
+                  <option value="standard" selected>standard · 标准版</option>
+                  <option value="professional">professional · 专业版</option>
+                </select>
+              </label>
+              <label class="field compact">
+                <span>输出分辨率模式</span>
+                <select id="enhanceResolutionMode">
+                  <option value="preset" selected>预设值（resolution）</option>
+                  <option value="limit">短边限制（resolution_limit）</option>
+                  <option value="none">不指定</option>
+                </select>
+              </label>
+              <label class="field compact" id="enhanceResolutionPresetField">
+                <span>分辨率（resolution）</span>
+                <select id="enhanceResolution">
+                  <option value="720p">720p</option>
+                  <option value="1080p" selected>1080p</option>
+                  <option value="4k">4k</option>
+                </select>
+              </label>
+              <label class="field compact" id="enhanceResolutionLimitField" hidden>
+                <span>短边像素（64-2160）</span>
+                <input id="enhanceResolutionLimit" type="number" min="64" max="2160" step="1" placeholder="例如 720">
+              </label>
+              <label class="field compact">
+                <span>帧率（fps，可留空）</span>
+                <input id="enhanceFps" type="number" min="1" max="120" step="1" placeholder="留空则保持原帧率，最高 120">
+              </label>
+            </div>
+            <p class="enhance-hint">
+              耗时预估：标准版 RTF ≈ 6~10，专业版 ≥ 30。1 分钟视频预计需 6 分钟以上。
+            </p>
+            <div class="card-actions">
+              <button id="enhanceSubmitButton" class="secondary-button" type="button">提交画质增强任务</button>
+              <button id="enhanceRefreshAllButton" class="ghost-button" type="button">刷新全部状态</button>
+              <button id="enhanceClearFinishedButton" class="ghost-button danger-soft" type="button">清空已完成 / 失败</button>
+            </div>
+          </article>
+
+          <section class="enhance-history">
+            <div class="panel-header">
+              <h2>增强任务归档</h2>
+              <span class="meta" id="enhanceHistoryMeta"></span>
+            </div>
+            <div id="enhanceTaskList" class="enhance-task-list"></div>
+          </section>
+        </section>
       </section>
 
       <template id="shotTemplate">
@@ -373,6 +459,6 @@
     </div>
   </div>
 
-  <script src="./app.js?v=20260413a"></script>
+  <script src="./app.js?v=20260417b"></script>
 </body>
 </html>
