@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./styles.css?v=20260417b">
+  <link rel="stylesheet" href="./styles.css?v=20260417c">
 </head>
 <body>
   <div class="shell">
@@ -17,6 +17,7 @@
         <button id="subjectsTab" class="view-tab" type="button">主体库</button>
         <button id="favoritesTab" class="view-tab" type="button">收藏夹</button>
         <button id="enhanceTab" class="view-tab" type="button">画质增强</button>
+        <button id="understandTab" class="view-tab" type="button">视频理解</button>
       </nav>
       <button id="settingsButton" class="ghost-button settings-trigger" type="button">模型与 API 设置</button>
     </div>
@@ -250,6 +251,69 @@
         </section>
       </section>
 
+      <section id="understandView" hidden>
+        <section class="summary-bar">
+          <div>
+            <strong id="understandTaskCount">0</strong>
+            <span>条理解记录</span>
+          </div>
+          <div>
+            <strong id="understandSucceededCount">0</strong>
+            <span>已完成</span>
+          </div>
+          <p id="understandStatusText" class="status-text">基于 AI MediaKit 调用火山方舟视觉大模型，对公网视频 URL 抽帧并完成理解。</p>
+        </section>
+        <section class="enhance-workbench">
+          <article class="shot-card enhance-form-card">
+            <div class="panel-header">
+              <h2>新建理解任务</h2>
+              <span class="meta">URL 方式最高 5GB · 同步返回结果</span>
+            </div>
+            <label class="field">
+              <span>视频 URL（video_url）</span>
+              <input id="understandVideoUrl" type="text" placeholder="https://example.com/video.mp4">
+            </label>
+            <label class="field">
+              <span>提示词 / 问题（prompt）</span>
+              <textarea id="understandPrompt" rows="3" placeholder="例如：总结描述视频的主要内容？"></textarea>
+            </label>
+            <div class="enhance-grid">
+              <label class="field compact">
+                <span>火山方舟模型 ID</span>
+                <input id="understandModel" type="text" placeholder="例如：doubao-seed-1-6-vision-250615">
+              </label>
+              <label class="field compact">
+                <span>抽帧帧率 fps（0.01 - 5，可留空）</span>
+                <input id="understandFps" type="number" min="0.01" max="5" step="0.1" placeholder="默认 1">
+              </label>
+              <label class="field compact">
+                <span>最大帧数 max_frames（可留空）</span>
+                <input id="understandMaxFrames" type="number" min="1" step="1" placeholder="默认按预算">
+              </label>
+              <label class="field compact">
+                <span>max_pixels（单帧最大像素数，可留空）</span>
+                <input id="understandMaxPixels" type="number" min="1" step="1" placeholder="默认 677376，最大 9031680">
+              </label>
+            </div>
+            <p class="enhance-hint">
+              调用地址：<code>amk-ark.cn-beijing.volces.com/api/v1/chat/completions</code>，鉴权格式 <code>Bearer 方舟Key/MediaKitKey</code>。
+            </p>
+            <div class="card-actions">
+              <button id="understandSubmitButton" class="secondary-button" type="button">提交视频理解</button>
+              <button id="understandClearButton" class="ghost-button danger-soft" type="button">清空历史</button>
+            </div>
+          </article>
+
+          <section class="enhance-history">
+            <div class="panel-header">
+              <h2>视频理解归档</h2>
+              <span class="meta" id="understandHistoryMeta"></span>
+            </div>
+            <div id="understandTaskList" class="enhance-task-list"></div>
+          </section>
+        </section>
+      </section>
+
       <template id="shotTemplate">
         <article class="shot-card">
           <div class="shot-order"></div>
@@ -459,6 +523,6 @@
     </div>
   </div>
 
-  <script src="./app.js?v=20260417b"></script>
+  <script src="./app.js?v=20260417c"></script>
 </body>
 </html>

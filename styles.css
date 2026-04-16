@@ -2146,3 +2146,31 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 }
+
+.understand-answer {
+  margin-top: 12px;
+  padding: 14px 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.understand-answer h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.understand-answer-text {
+  margin: 0;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: transparent;
+}

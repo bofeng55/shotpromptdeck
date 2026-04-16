@@ -13,6 +13,9 @@ const ENHANCE_POLL_INTERVAL_MS = 15000;
 const ENHANCE_BASE_URL = "/api/enhance-video";
 const ENHANCE_TASK_BASE_URL = "/api/enhance-tasks";
 const DEFAULT_ENHANCE_BASE_URL = "https://amk.cn-beijing.volces.com/api/v1";
+const UNDERSTAND_BASE_URL = "/api/understand-video";
+const DEFAULT_UNDERSTAND_BASE_URL = "https://amk-ark.cn-beijing.volces.com/api/v1";
+const DEFAULT_UNDERSTAND_MODEL = "doubao-seed-1-6-vision-250615";
 const SYSTEM_PROMPT = "你是专业的视频生成提示词导演，只输出最终可直接使用的中文视频生成 Prompt，不要解释。";
 const PROVIDER_CONFIGS = {
   gemini: {
@@ -62,6 +65,10 @@ const defaultState = {
     mediaKitProvider: {
       baseUrl: DEFAULT_ENHANCE_BASE_URL,
     },
+    understandProvider: {
+      baseUrl: DEFAULT_UNDERSTAND_BASE_URL,
+      model: DEFAULT_UNDERSTAND_MODEL,
+    },
     customProvider: {
       label: "自定义 API",
       baseUrl: "",
@@ -74,6 +81,7 @@ const defaultState = {
   favorites: [],
   subjects: [],
   enhanceTasks: [],
+  understandTasks: [],
 };
 
 const elements = {
@@ -81,6 +89,7 @@ const elements = {
   subjectsTab: document.querySelector("#subjectsTab"),
   favoritesTab: document.querySelector("#favoritesTab"),
   enhanceTab: document.querySelector("#enhanceTab"),
+  understandTab: document.querySelector("#understandTab"),
   settingsButton: document.querySelector("#settingsButton"),
   heroTitleLine1: document.querySelector("#heroTitleLine1"),
   heroTitleLine2: document.querySelector("#heroTitleLine2"),
@@ -124,6 +133,20 @@ const elements = {
   enhanceSucceededCount: document.querySelector("#enhanceSucceededCount"),
   enhanceStatusText: document.querySelector("#enhanceStatusText"),
   enhanceHistoryMeta: document.querySelector("#enhanceHistoryMeta"),
+  understandView: document.querySelector("#understandView"),
+  understandVideoUrl: document.querySelector("#understandVideoUrl"),
+  understandPrompt: document.querySelector("#understandPrompt"),
+  understandModel: document.querySelector("#understandModel"),
+  understandFps: document.querySelector("#understandFps"),
+  understandMaxFrames: document.querySelector("#understandMaxFrames"),
+  understandMaxPixels: document.querySelector("#understandMaxPixels"),
+  understandSubmitButton: document.querySelector("#understandSubmitButton"),
+  understandClearButton: document.querySelector("#understandClearButton"),
+  understandTaskList: document.querySelector("#understandTaskList"),
+  understandTaskCount: document.querySelector("#understandTaskCount"),
+  understandSucceededCount: document.querySelector("#understandSucceededCount"),
+  understandStatusText: document.querySelector("#understandStatusText"),
+  understandHistoryMeta: document.querySelector("#understandHistoryMeta"),
   shotCount: document.querySelector("#shotCount"),
   historyCount: document.querySelector("#historyCount"),
   chatCount: document.querySelector("#chatCount"),
@@ -188,6 +211,14 @@ const uiState = {
     resolutionLimit: "",
     fps: "",
   },
+  understandForm: {
+    videoUrl: "",
+    prompt: "",
+    model: "",
+    fps: "",
+    maxFrames: "",
+    maxPixels: "",
+  },
 };
 
 bootstrap();
@@ -226,11 +257,16 @@ function bindGlobalEvents() {
     setCurrentView("enhance");
   });
 
+  elements.understandTab.addEventListener("click", () => {
+    setCurrentView("understand");
+  });
+
   elements.settingsButton.addEventListener("click", () => {
     openSettingsModal();
   });
 
   bindEnhanceEvents();
+  bindUnderstandEvents();
 
   elements.favoritesSearch.addEventListener("input", (event) => {
     uiState.favoriteSearchTerm = event.target.value.trim().toLowerCase();
@@ -667,16 +703,19 @@ function renderPageChrome() {
   const isSubjects = currentView === "subjects";
   const isFavorites = currentView === "favorites";
   const isEnhance = currentView === "enhance";
+  const isUnderstand = currentView === "understand";
   elements.workspaceTab.classList.toggle("is-active", isWorkspace);
   elements.subjectsTab.classList.toggle("is-active", isSubjects);
   elements.favoritesTab.classList.toggle("is-active", isFavorites);
   elements.enhanceTab.classList.toggle("is-active", isEnhance);
+  elements.understandTab.classList.toggle("is-active", isUnderstand);
   elements.workspaceControls.hidden = !isWorkspace;
   elements.workspaceSummary.hidden = !isWorkspace;
   elements.workspaceView.hidden = !isWorkspace;
   elements.subjectsView.hidden = !isSubjects;
   elements.favoritesView.hidden = !isFavorites;
   elements.enhanceView.hidden = !isEnhance;
+  elements.understandView.hidden = !isUnderstand;
   elements.favoritesBulkBar.hidden = !isFavorites || !uiState.isFavoriteBatchMode;
   elements.favoritesSearch.value = uiState.favoriteSearchTerm;
   populateFavoriteTagFilter();
@@ -709,6 +748,15 @@ function renderPageChrome() {
     elements.heroSubtitleLine1.textContent = "基于 AI MediaKit 对视频进行超分、插帧、色彩与降噪增强，";
     elements.heroSubtitleLine2.textContent = "支持 AIGC、短剧、UGC、老片修复四种预设场景。";
     renderEnhanceView();
+    return;
+  }
+
+  if (isUnderstand) {
+    elements.heroTitleLine1.textContent = "视频";
+    elements.heroTitleLine2.textContent = "理解";
+    elements.heroSubtitleLine1.textContent = "通过 AI MediaKit 把视频抽帧后喂给火山方舟视觉大模型，";
+    elements.heroSubtitleLine2.textContent = "支持内容总结、场景分析、时序定位等任务。";
+    renderUnderstandView();
     return;
   }
 
@@ -2978,6 +3026,44 @@ function getCurrentMediaKitApiKey() {
   return String(state.settings.mediaKitApiKey || "").trim();
 }
 
+function createDefaultUnderstandProvider() {
+  return {
+    baseUrl: DEFAULT_UNDERSTAND_BASE_URL,
+    model: DEFAULT_UNDERSTAND_MODEL,
+  };
+}
+
+function normalizeUnderstandProvider(input) {
+  const provider = {
+    ...createDefaultUnderstandProvider(),
+    ...(input || {}),
+  };
+  provider.baseUrl = String(provider.baseUrl || DEFAULT_UNDERSTAND_BASE_URL).trim() || DEFAULT_UNDERSTAND_BASE_URL;
+  provider.model = String(provider.model || "").trim();
+  return provider;
+}
+
+function normalizeUnderstandTask(input) {
+  const now = new Date().toISOString();
+  return {
+    id: input?.id || crypto.randomUUID(),
+    status: normalizeVideoStatus(input?.status || "succeeded"),
+    answer: String(input?.answer || ""),
+    error: String(input?.error || ""),
+    model: String(input?.model || ""),
+    params: {
+      videoUrl: String(input?.params?.videoUrl || ""),
+      prompt: String(input?.params?.prompt || ""),
+      fps: Number.isFinite(Number(input?.params?.fps)) ? Number(input.params.fps) : null,
+      maxFrames: Number.isFinite(Number(input?.params?.maxFrames)) ? Number(input.params.maxFrames) : null,
+      maxPixels: Number.isFinite(Number(input?.params?.maxPixels)) ? Number(input.params.maxPixels) : null,
+    },
+    usage: input?.usage && typeof input.usage === "object" ? input.usage : null,
+    createdAt: String(input?.createdAt || now),
+    updatedAt: String(input?.updatedAt || now),
+  };
+}
+
 function normalizeEnhanceTask(input) {
   const now = new Date().toISOString();
   return {
@@ -3334,6 +3420,7 @@ function normalizeState(input) {
   const favorites = Array.isArray(input.favorites) ? input.favorites : [];
   const subjects = Array.isArray(input.subjects) ? input.subjects : [];
   const enhanceTasks = Array.isArray(input.enhanceTasks) ? input.enhanceTasks : [];
+  const understandTasks = Array.isArray(input.understandTasks) ? input.understandTasks : [];
   return {
     settings: {
       ...defaultState.settings,
@@ -3345,12 +3432,14 @@ function normalizeState(input) {
       videoProvider: normalizeVideoProvider(input?.settings?.videoProvider),
       mediaKitApiKey: String(input?.settings?.mediaKitApiKey || "").trim(),
       mediaKitProvider: normalizeMediaKitProvider(input?.settings?.mediaKitProvider),
+      understandProvider: normalizeUnderstandProvider(input?.settings?.understandProvider),
       customProvider: normalizeCustomProvider(input?.settings?.customProvider, input?.settings?.model),
     },
     shots: shots.length ? shots.map(normalizeShot) : [createShot()],
     favorites: favorites.map(normalizeFavorite),
     subjects: subjects.map(normalizeSubject),
     enhanceTasks: enhanceTasks.map(normalizeEnhanceTask),
+    understandTasks: understandTasks.map(normalizeUnderstandTask),
   };
 }
 
@@ -3761,6 +3850,7 @@ function renderSettingsModal() {
   const provider = getCurrentProviderConfig();
   const videoProvider = normalizeVideoProvider(state.settings.videoProvider);
   const mediaKitProvider = normalizeMediaKitProvider(state.settings.mediaKitProvider);
+  const understandProvider = normalizeUnderstandProvider(state.settings.understandProvider);
   const currentApiKey = getCurrentApiKey();
   const currentVideoApiKey = getCurrentVideoApiKey();
   const currentMediaKitApiKey = getCurrentMediaKitApiKey();
@@ -3917,6 +4007,20 @@ function renderSettingsModal() {
             <p class="meta">默认调用 AI MediaKit 画质增强接口（提交 <code>/tools/enhance-video</code>，查询 <code>/tasks/{task_id}</code>）。未填 API Key 时，会通过服务端 /api/enhance-video 代理。</p>
           </div>
         </section>
+        <section class="prompt-panel settings-panel">
+          <div class="favorite-block">
+            <h3>视频理解服务</h3>
+            <label class="field compact">
+              <span>视频理解 Base URL</span>
+              <input class="settings-understand-base-url-input" type="text" value="${escapeHtml(understandProvider.baseUrl)}" placeholder="${escapeHtml(DEFAULT_UNDERSTAND_BASE_URL)}">
+            </label>
+            <label class="field compact">
+              <span>默认火山方舟模型 ID</span>
+              <input class="settings-understand-model-input" type="text" value="${escapeHtml(understandProvider.model)}" placeholder="${escapeHtml(DEFAULT_UNDERSTAND_MODEL)}">
+            </label>
+            <p class="meta">视频理解复用 Seedance / ARK API Key 与 MediaKit API Key，按 <code>Bearer 方舟Key/MediaKitKey</code> 拼接，通过服务端 /api/understand-video 代理。</p>
+          </div>
+        </section>
       </div>
     </article>
   `;
@@ -4006,6 +4110,23 @@ function renderSettingsModal() {
       baseUrl: event.target.value,
     };
     queuePersistState("画质增强 API 地址已更新。");
+  });
+
+  const understandBaseUrlInput = elements.settingsModalContent.querySelector(".settings-understand-base-url-input");
+  const understandModelInput = elements.settingsModalContent.querySelector(".settings-understand-model-input");
+  understandBaseUrlInput?.addEventListener("input", (event) => {
+    state.settings.understandProvider = {
+      ...normalizeUnderstandProvider(state.settings.understandProvider),
+      baseUrl: event.target.value,
+    };
+    queuePersistState("视频理解 API 地址已更新。");
+  });
+  understandModelInput?.addEventListener("input", (event) => {
+    state.settings.understandProvider = {
+      ...normalizeUnderstandProvider(state.settings.understandProvider),
+      model: event.target.value,
+    };
+    queuePersistState("视频理解默认模型已更新。");
   });
 
   if (shouldEditApiKey) {
@@ -4681,6 +4802,286 @@ function resumePendingEnhanceTasks() {
       startEnhancePolling(task.id);
     }
   });
+}
+
+function bindUnderstandEvents() {
+  if (!elements.understandView) return;
+  const form = uiState.understandForm;
+
+  elements.understandVideoUrl.addEventListener("input", (event) => {
+    form.videoUrl = event.target.value;
+  });
+  elements.understandPrompt.addEventListener("input", (event) => {
+    form.prompt = event.target.value;
+  });
+  elements.understandModel.addEventListener("input", (event) => {
+    form.model = event.target.value;
+  });
+  elements.understandFps.addEventListener("input", (event) => {
+    form.fps = event.target.value;
+  });
+  elements.understandMaxFrames.addEventListener("input", (event) => {
+    form.maxFrames = event.target.value;
+  });
+  elements.understandMaxPixels.addEventListener("input", (event) => {
+    form.maxPixels = event.target.value;
+  });
+
+  elements.understandSubmitButton.addEventListener("click", (event) => {
+    handleSubmitUnderstandTask(event.currentTarget);
+  });
+
+  elements.understandClearButton.addEventListener("click", async () => {
+    if (!state.understandTasks.length) {
+      setUnderstandStatus("暂无视频理解记录。");
+      return;
+    }
+    state.understandTasks = [];
+    await persistState("已清空视频理解历史。");
+    renderUnderstandView();
+  });
+}
+
+function setUnderstandStatus(message) {
+  if (elements.understandStatusText) {
+    elements.understandStatusText.textContent = message;
+  }
+  setStatus(message);
+}
+
+function renderUnderstandView() {
+  const form = uiState.understandForm;
+  const provider = normalizeUnderstandProvider(state.settings.understandProvider);
+  elements.understandVideoUrl.value = form.videoUrl || "";
+  elements.understandPrompt.value = form.prompt || "";
+  elements.understandModel.value = form.model || provider.model || "";
+  elements.understandFps.value = form.fps || "";
+  elements.understandMaxFrames.value = form.maxFrames || "";
+  elements.understandMaxPixels.value = form.maxPixels || "";
+
+  const tasks = [...state.understandTasks].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+  elements.understandTaskCount.textContent = String(state.understandTasks.length);
+  elements.understandSucceededCount.textContent = String(state.understandTasks.filter((t) => t.status === "succeeded").length);
+  elements.understandHistoryMeta.textContent = tasks.length ? `共 ${tasks.length} 条记录` : "暂无记录";
+
+  const container = elements.understandTaskList;
+  container.innerHTML = "";
+
+  if (!tasks.length) {
+    container.innerHTML = '<div class="empty-state">还没有提交过视频理解任务。填写视频 URL 和提示词后点击"提交视频理解"即可开始。</div>';
+    return;
+  }
+
+  tasks.forEach((task) => {
+    const card = document.createElement("article");
+    card.className = `enhance-task-card status-${task.status}`;
+    card.dataset.understandTaskId = task.id;
+
+    const statusLabel = getVideoStatusText(task.status);
+    const params = task.params || {};
+    const summary = [
+      params.prompt ? `提问：${truncateText(params.prompt, 40)}` : "",
+      task.model ? `模型 ${task.model}` : "",
+      Number.isFinite(Number(params.fps)) ? `fps ${params.fps}` : "",
+      Number.isFinite(Number(params.maxFrames)) ? `max_frames ${params.maxFrames}` : "",
+      Number.isFinite(Number(params.maxPixels)) ? `max_pixels ${params.maxPixels}` : "",
+    ].filter(Boolean).join(" · ") || "—";
+
+    const usage = task.usage || {};
+    const usageBits = [
+      Number.isFinite(Number(usage.prompt_tokens)) ? `输入 ${usage.prompt_tokens}` : "",
+      Number.isFinite(Number(usage.completion_tokens)) ? `输出 ${usage.completion_tokens}` : "",
+      Number.isFinite(Number(usage.total_tokens)) ? `合计 ${usage.total_tokens}` : "",
+    ].filter(Boolean).join(" · ");
+
+    card.innerHTML = `
+      <header class="enhance-task-header">
+        <div class="enhance-task-status">
+          <span class="status-chip status-${escapeHtml(task.status)}">${escapeHtml(statusLabel)}</span>
+          <span class="meta">提交于 ${escapeHtml(formatTime(task.createdAt))}</span>
+        </div>
+        <div class="enhance-task-meta">
+          <span class="meta">${escapeHtml(summary)}</span>
+        </div>
+      </header>
+      <div class="enhance-task-body">
+        <p class="enhance-task-source">
+          <span class="meta">源视频：</span>
+          <a href="${escapeHtml(params.videoUrl || "#")}" target="_blank" rel="noopener noreferrer">${escapeHtml(params.videoUrl || "—")}</a>
+        </p>
+        ${task.error ? `<p class="enhance-task-error">${escapeHtml(task.error)}</p>` : ""}
+        ${task.answer ? `
+          <div class="understand-answer">
+            <h4>模型回复</h4>
+            <pre class="understand-answer-text">${escapeHtml(task.answer)}</pre>
+          </div>
+        ` : ""}
+        ${usageBits ? `<p class="meta">Token 消耗：${escapeHtml(usageBits)}</p>` : ""}
+      </div>
+      <footer class="enhance-task-footer card-actions">
+        ${task.answer ? `<button class="ghost-button understand-copy-answer-button" type="button">复制回复</button>` : ""}
+        ${params.videoUrl ? `<button class="ghost-button understand-reuse-button" type="button">重用此条参数</button>` : ""}
+        <button class="ghost-button understand-delete-button danger" type="button">删除</button>
+      </footer>
+    `;
+
+    card.querySelector(".understand-copy-answer-button")?.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(task.answer);
+        setUnderstandStatus("已复制模型回复到剪贴板。");
+      } catch (error) {
+        setUnderstandStatus("复制失败，请手动选中文字。");
+      }
+    });
+    card.querySelector(".understand-reuse-button")?.addEventListener("click", () => {
+      const nextForm = uiState.understandForm;
+      nextForm.videoUrl = params.videoUrl || "";
+      nextForm.prompt = params.prompt || "";
+      nextForm.model = task.model || nextForm.model;
+      nextForm.fps = Number.isFinite(Number(params.fps)) ? String(params.fps) : "";
+      nextForm.maxFrames = Number.isFinite(Number(params.maxFrames)) ? String(params.maxFrames) : "";
+      nextForm.maxPixels = Number.isFinite(Number(params.maxPixels)) ? String(params.maxPixels) : "";
+      renderUnderstandView();
+      elements.understandPrompt.focus();
+    });
+    card.querySelector(".understand-delete-button")?.addEventListener("click", async () => {
+      state.understandTasks = state.understandTasks.filter((t) => t.id !== task.id);
+      await persistState("已删除视频理解记录。");
+      renderUnderstandView();
+    });
+
+    container.append(card);
+  });
+}
+
+function truncateText(text, max) {
+  const value = String(text || "");
+  if (value.length <= max) return value;
+  return `${value.slice(0, Math.max(0, max - 1))}…`;
+}
+
+async function handleSubmitUnderstandTask(button) {
+  const form = uiState.understandForm;
+  const provider = normalizeUnderstandProvider(state.settings.understandProvider);
+  const videoUrl = String(form.videoUrl || "").trim();
+  const prompt = String(form.prompt || "").trim();
+  const model = String(form.model || provider.model || "").trim();
+
+  if (!videoUrl) {
+    setUnderstandStatus("请先填写源视频 URL。");
+    return;
+  }
+  if (!/^https?:\/\//i.test(videoUrl)) {
+    setUnderstandStatus("视频 URL 必须是公网可访问的 http(s) 地址。");
+    return;
+  }
+  if (!prompt) {
+    setUnderstandStatus("请填写提示词 / 问题。");
+    return;
+  }
+  if (!model) {
+    setUnderstandStatus("请填写火山方舟模型 ID。");
+    return;
+  }
+
+  const arkApiKey = getCurrentVideoApiKey();
+  const mediaKitApiKey = getCurrentMediaKitApiKey();
+  if (!arkApiKey) {
+    setUnderstandStatus("请先在设置里填写 Seedance / ARK API Key（用于视频理解的火山方舟鉴权）。");
+    return;
+  }
+  if (!mediaKitApiKey) {
+    setUnderstandStatus("请先在设置里填写 AI MediaKit API Key。");
+    return;
+  }
+
+  const params = { videoUrl, prompt };
+  let fps;
+  if (form.fps !== "" && form.fps !== null && form.fps !== undefined) {
+    fps = Number(form.fps);
+    if (!Number.isFinite(fps) || fps < 0.01 || fps > 5) {
+      setUnderstandStatus("fps 范围应为 0.01 ~ 5。");
+      return;
+    }
+    params.fps = fps;
+  }
+  let maxFrames;
+  if (form.maxFrames !== "" && form.maxFrames !== null && form.maxFrames !== undefined) {
+    maxFrames = Number.parseInt(form.maxFrames, 10);
+    if (!Number.isFinite(maxFrames) || maxFrames < 1) {
+      setUnderstandStatus("max_frames 需要大于等于 1 的整数。");
+      return;
+    }
+    params.maxFrames = maxFrames;
+  }
+  let maxPixels;
+  if (form.maxPixels !== "" && form.maxPixels !== null && form.maxPixels !== undefined) {
+    maxPixels = Number.parseInt(form.maxPixels, 10);
+    if (!Number.isFinite(maxPixels) || maxPixels < 1) {
+      setUnderstandStatus("max_pixels 需要大于等于 1 的整数。");
+      return;
+    }
+    params.maxPixels = maxPixels;
+  }
+
+  const originalLabel = button.textContent;
+  try {
+    setButtonLoading(button, "请求中，视频较长时请耐心等待...");
+    setUnderstandStatus("视频理解请求已发出，正在抽帧并推理...");
+
+    let response;
+    try {
+      response = await fetch(UNDERSTAND_BASE_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          arkApiKey,
+          mediaKitApiKey,
+          baseUrl: provider.baseUrl,
+          model,
+          prompt,
+          videoUrl,
+          fps,
+          max_frames: maxFrames,
+          max_pixels: maxPixels,
+        }),
+      });
+    } catch (fetchError) {
+      throw new Error(
+        "无法连接到 /api/understand-video。请确认本地开发服务器已经重启（node dev-server.js），"
+          + "或部署环境下已经包含视频理解接口。" + (fetchError?.message ? `（${fetchError.message}）` : "")
+      );
+    }
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(result.error || `视频理解请求失败（${response.status}）`);
+    }
+
+    const task = normalizeUnderstandTask({
+      status: "succeeded",
+      answer: String(result.answer || ""),
+      model: String(result.model || model),
+      usage: result.usage || null,
+      params,
+    });
+    state.understandTasks.unshift(task);
+    await persistState("视频理解已完成。");
+    setUnderstandStatus("视频理解已完成。");
+    renderUnderstandView();
+  } catch (error) {
+    const task = normalizeUnderstandTask({
+      status: "failed",
+      error: error.message || "视频理解失败。",
+      model,
+      params,
+    });
+    state.understandTasks.unshift(task);
+    await persistState("视频理解失败。");
+    setUnderstandStatus(error.message || "视频理解失败。");
+    renderUnderstandView();
+  } finally {
+    resetButtonLoading(button, originalLabel);
+  }
 }
 
 function escapeHtml(input) {
