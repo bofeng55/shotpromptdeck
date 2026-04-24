@@ -18,6 +18,8 @@ const DEFAULT_UNDERSTAND_BASE_URL = "https://amk-ark.cn-beijing.volces.com/api/v
 const DEFAULT_UNDERSTAND_MODEL = "doubao-seed-1-6-vision-250615";
 const PROXY_VIDEO_URL = "/api/proxy-video";
 const LOCAL_VIDEO_DIR_RECORD_KEY = "local-video-dir-handle";
+const DEFAULT_SCENE_ID = "scene-default";
+const DEFAULT_SCENE_NAME = "未分类";
 const SYSTEM_PROMPT = "你是专业的视频生成提示词导演，只输出最终可直接使用的中文视频生成 Prompt，不要解释。";
 const PROVIDER_CONFIGS = {
   gemini: {
@@ -80,6 +82,8 @@ const defaultState = {
     },
   },
   shots: [],
+  scenes: [],
+  currentSceneId: "",
   favorites: [],
   subjects: [],
   enhanceTasks: [],
@@ -110,6 +114,16 @@ const elements = {
   clearButton: document.querySelector("#clearButton"),
   shotsContainer: document.querySelector("#shotsContainer"),
   workspaceView: document.querySelector("#workspaceView"),
+  sceneTabsBar: document.querySelector("#sceneTabsBar"),
+  sceneTabs: document.querySelector("#sceneTabs"),
+  sceneAddButton: document.querySelector("#sceneAddButton"),
+  shotJumpInput: document.querySelector("#shotJumpInput"),
+  shotCollapseAllButton: document.querySelector("#shotCollapseAllButton"),
+  shotExpandAllButton: document.querySelector("#shotExpandAllButton"),
+  shotSidebarToggleButton: document.querySelector("#shotSidebarToggleButton"),
+  shotSidebar: document.querySelector("#shotSidebar"),
+  shotSidebarList: document.querySelector("#shotSidebarList"),
+  shotSidebarCount: document.querySelector("#shotSidebarCount"),
   subjectsView: document.querySelector("#subjectsView"),
   subjectsContainer: document.querySelector("#subjectsContainer"),
   subjectsUploadInput: document.querySelector("#subjectsUploadInput"),
@@ -208,6 +222,9 @@ const uiState = {
   isEditingApiKey: false,
   isEditingVideoApiKey: false,
   isEditingMediaKitApiKey: false,
+  shotJumpQuery: "",
+  collapsedShotIds: new Set(),
+  sidebarCollapsed: false,
   enhanceForm: {
     videoUrl: "",
     scene: "aigc",
@@ -240,6 +257,7 @@ async function bootstrap() {
   }
 
   await initLocalVideoDir();
+  document.body.dataset.sidebarCollapsed = uiState.sidebarCollapsed ? "true" : "false";
   render();
   resumePendingVideoTasks();
   resumePendingEnhanceTasks();
@@ -442,10 +460,24 @@ function bindGlobalEvents() {
 
     closeLightbox();
     stopAllVideoPolling();
-    state.shots = [createShot()];
+    uiState.collapsedShotIds.clear();
+    state.shots = [createShot(getActiveSceneId())];
     await persistState("已清空工作台记录。");
     render();
   });
+
+  elements.sceneAddButton?.addEventListener("click", () => addScene());
+  elements.shotJumpInput?.addEventListener("input", (event) => {
+    uiState.shotJumpQuery = event.target.value;
+    applyShotJumpFilter();
+    if (uiState.shotJumpQuery.trim()) {
+      const firstMatch = elements.shotsContainer.querySelector(".shot-card:not(.is-filter-hidden)");
+      if (firstMatch) firstMatch.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  });
+  elements.shotCollapseAllButton?.addEventListener("click", () => setAllShotsCollapsed(true));
+  elements.shotExpandAllButton?.addEventListener("click", () => setAllShotsCollapsed(false));
+  elements.shotSidebarToggleButton?.addEventListener("click", () => toggleSidebar());
 
   elements.lightboxClose.addEventListener("click", closeLightbox);
   elements.lightboxBackdrop.addEventListener("click", closeLightbox);
@@ -476,19 +508,87 @@ function bindGlobalEvents() {
   });
 }
 
+function renderSceneTabs() {
+  const container = elements.sceneTabs;
+  if (!container) return;
+  const activeId = getActiveSceneId();
+  const scenes = [...(state.scenes || [])].sort((a, b) => (a.order || 0) - (b.order || 0));
+  container.innerHTML = scenes.map((scene) => {
+    const count = getShotsInScene(scene.id).length;
+    const active = scene.id === activeId ? " is-active" : "";
+    return `
+      <div class="scene-tab${active}" data-scene-id="${escapeHtml(scene.id)}">
+        <button class="scene-tab-select" type="button">
+          <span class="scene-tab-name">${escapeHtml(scene.name)}</span>
+          <span class="scene-tab-count">${count}</span>
+        </button>
+        <button class="scene-tab-rename" type="button" title="重命名">✎</button>
+        <button class="scene-tab-delete" type="button" title="删除">×</button>
+      </div>
+    `;
+  }).join("");
+
+  container.querySelectorAll(".scene-tab").forEach((el) => {
+    const sceneId = el.dataset.sceneId;
+    el.querySelector(".scene-tab-select").addEventListener("click", () => setCurrentScene(sceneId));
+    el.querySelector(".scene-tab-rename").addEventListener("click", (e) => { e.stopPropagation(); renameScene(sceneId); });
+    el.querySelector(".scene-tab-delete").addEventListener("click", (e) => { e.stopPropagation(); deleteScene(sceneId); });
+  });
+}
+
+function renderShotSidebar() {
+  const list = elements.shotSidebarList;
+  const count = elements.shotSidebarCount;
+  if (!list) return;
+  const activeSceneId = getActiveSceneId();
+  const sceneShots = getShotsInScene(activeSceneId);
+  const jumpQuery = uiState.shotJumpQuery || "";
+  if (count) {
+    count.textContent = sceneShots.length ? `${sceneShots.length} 个镜头` : "";
+  }
+  if (!sceneShots.length) {
+    list.innerHTML = '<div class="empty-state">此场次暂无镜头。</div>';
+    return;
+  }
+  list.innerHTML = sceneShots.map((shot, i) => {
+    const isMatch = matchesJumpQuery(shot, i, jumpQuery);
+    const title = (shot.title || shot.directorNotes?.slice(0, 30) || "（未命名）").trim();
+    const hasVideo = Boolean(shot.videoTask?.videoUrl);
+    const videoDot = hasVideo ? '<span class="sidebar-dot" title="已生成视频"></span>' : "";
+    return `
+      <button class="shot-sidebar-item${isMatch ? "" : " is-dimmed"}" type="button" data-shot-id="${escapeHtml(shot.id)}">
+        <span class="sidebar-order">#${String(i + 1).padStart(2, "0")}</span>
+        <span class="sidebar-title">${escapeHtml(title)}</span>
+        ${videoDot}
+      </button>
+    `;
+  }).join("");
+  list.querySelectorAll(".shot-sidebar-item").forEach((el) => {
+    el.addEventListener("click", () => jumpToShot(el.dataset.shotId));
+  });
+}
+
 function render() {
   closeMentionDropdown();
   renderPageChrome();
   syncSettingsInputs();
   renderSettingsModal();
+  renderSceneTabs();
   elements.shotsContainer.innerHTML = "";
   elements.favoritesContainer.innerHTML = "";
 
-  state.shots.forEach((shot, index) => {
+  const activeSceneId = getActiveSceneId();
+  const sceneShots = getShotsInScene(activeSceneId);
+  const jumpQuery = uiState.shotJumpQuery || "";
+
+  sceneShots.forEach((shot, index) => {
     const fragment = elements.shotTemplate.content.cloneNode(true);
     const card = fragment.querySelector(".shot-card");
     const shotStatusBar = fragment.querySelector(".shot-status-bar");
     const order = fragment.querySelector(".shot-order");
+    const headTitle = fragment.querySelector(".shot-head-title");
+    const sceneSelect = fragment.querySelector(".shot-scene-select");
+    const collapseButton = fragment.querySelector(".shot-collapse-button");
     const titleInput = fragment.querySelector(".shot-title");
     const directorNotesInput = fragment.querySelector(".director-notes");
     const promptInput = fragment.querySelector(".shot-prompt");
@@ -519,9 +619,26 @@ function render() {
     const favoriteButton = fragment.querySelector(".favorite-button");
     const duplicateFavoriteButton = fragment.querySelector(".duplicate-favorite-button");
 
-    order.textContent = `Shot ${String(index + 1).padStart(2, "0")}`;
+    const displayOrder = index + 1;
+    order.textContent = `Shot ${String(displayOrder).padStart(2, "0")}`;
     order.title = "拖拽以调整镜头顺序";
     card.dataset.shotId = shot.id;
+    card.dataset.shotOrder = String(displayOrder);
+    if (uiState.collapsedShotIds.has(shot.id)) {
+      card.dataset.collapsed = "true";
+      collapseButton.textContent = "展开";
+    } else {
+      card.dataset.collapsed = "false";
+      collapseButton.textContent = "折叠";
+    }
+    headTitle.textContent = shot.title || shot.directorNotes?.slice(0, 40) || "（未命名镜头）";
+    sceneSelect.innerHTML = state.scenes.map((s) => `<option value="${escapeHtml(s.id)}"${s.id === shot.sceneId ? " selected" : ""}>${escapeHtml(s.name)}</option>`).join("");
+    collapseButton.addEventListener("click", () => {
+      setShotCollapsed(shot.id, !uiState.collapsedShotIds.has(shot.id));
+    });
+    sceneSelect.addEventListener("change", async (event) => {
+      await moveShotToScene(shot.id, event.target.value);
+    });
     bindShotSortEvents(card, order, shot.id);
     titleInput.value = shot.title;
     titleInput.placeholder = "例如：s01c001";
@@ -573,6 +690,9 @@ function render() {
     titleInput.addEventListener("input", async (event) => {
       shot.title = event.target.value;
       shot.updatedAt = new Date().toISOString();
+      headTitle.textContent = shot.title || shot.directorNotes?.slice(0, 40) || "（未命名镜头）";
+      const sidebarItem = elements.shotSidebarList?.querySelector(`.shot-sidebar-item[data-shot-id="${shot.id}"] .sidebar-title`);
+      if (sidebarItem) sidebarItem.textContent = (shot.title || shot.directorNotes?.slice(0, 30) || "（未命名）").trim();
       queuePersistState("镜头标题已更新。");
     });
 
@@ -681,11 +801,11 @@ function render() {
     });
 
     fragment.querySelector(".insert-above-button").addEventListener("click", async () => {
-      await insertShotAt(index);
+      await insertShotRelative(shot.id, 0);
     });
 
     fragment.querySelector(".insert-below-button").addEventListener("click", async () => {
-      await insertShotAt(index + 1);
+      await insertShotRelative(shot.id, 1);
     });
 
     fragment.querySelector(".delete-button").addEventListener("click", async () => {
@@ -696,6 +816,7 @@ function render() {
 
       state.shots = state.shots.filter((item) => item.id !== shot.id);
       stopVideoPolling(shot.id);
+      uiState.collapsedShotIds.delete(shot.id);
       await persistState("镜头已删除。");
       render();
     });
@@ -714,8 +835,32 @@ function render() {
   });
 
   hydrateLocalVideoElements(elements.shotsContainer);
+  renderShotSidebar();
+  applyShotJumpFilter();
   renderFavorites();
   updateSummary();
+}
+
+function applyShotJumpFilter() {
+  const query = (uiState.shotJumpQuery || "").trim();
+  const cards = elements.shotsContainer.querySelectorAll(".shot-card");
+  cards.forEach((card) => {
+    const shotId = card.dataset.shotId;
+    const shot = getShotById(shotId);
+    if (!shot) return;
+    const index = Number(card.dataset.shotOrder || 0) - 1;
+    const match = matchesJumpQuery(shot, index, query);
+    card.classList.toggle("is-filter-hidden", !match);
+  });
+  elements.shotSidebarList?.querySelectorAll(".shot-sidebar-item").forEach((item) => {
+    const shotId = item.dataset.shotId;
+    const shot = getShotById(shotId);
+    if (!shot) return;
+    const sceneShots = getShotsInScene(shot.sceneId);
+    const i = sceneShots.findIndex((s) => s.id === shotId);
+    const match = matchesJumpQuery(shot, i, query);
+    item.classList.toggle("is-dimmed", !match);
+  });
 }
 
 function renderPageChrome() {
@@ -2058,7 +2203,11 @@ async function handleBatchGenerate(button) {
     }
   }
 
+  const activeSceneId = getActiveSceneId();
   const targets = state.shots.filter((shot) => {
+    if (shot.sceneId !== activeSceneId) {
+      return false;
+    }
     if (!getShotReferenceImages(shot).length) {
       return false;
     }
@@ -2843,10 +2992,18 @@ function parseDataUrl(dataUrl) {
   };
 }
 
-async function insertShotAt(index) {
-  state.shots.splice(index, 0, createShot());
+async function insertShotAt(index, sceneId) {
+  const targetSceneId = sceneId || getActiveSceneId();
+  state.shots.splice(index, 0, createShot(targetSceneId));
   await persistState("已插入新镜头。");
   render();
+}
+
+async function insertShotRelative(anchorShotId, offset) {
+  const idx = state.shots.findIndex((s) => s.id === anchorShotId);
+  if (idx === -1) return;
+  const anchorScene = state.shots[idx].sceneId;
+  await insertShotAt(idx + offset, anchorScene);
 }
 
 async function reorderShots(sourceId, targetId) {
@@ -2899,10 +3056,11 @@ function pushHistoryEntry(shot, prompt, label) {
   return true;
 }
 
-function createShot() {
+function createShot(sceneId) {
   const now = new Date().toISOString();
   return {
     id: crypto.randomUUID(),
+    sceneId: sceneId || getActiveSceneId(),
     linkedFavoriteId: "",
     title: "",
     directorNotes: "",
@@ -2916,6 +3074,168 @@ function createShot() {
     createdAt: now,
     updatedAt: now,
   };
+}
+
+function createScene(name) {
+  const now = new Date().toISOString();
+  return {
+    id: `scene-${crypto.randomUUID()}`,
+    name: String(name || "新场次").trim() || "新场次",
+    order: (state.scenes?.length || 0),
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function getActiveSceneId() {
+  if (state.currentSceneId && (state.scenes || []).some((s) => s.id === state.currentSceneId)) {
+    return state.currentSceneId;
+  }
+  return (state.scenes && state.scenes[0]?.id) || DEFAULT_SCENE_ID;
+}
+
+function getSceneById(id) {
+  return (state.scenes || []).find((s) => s.id === id) || null;
+}
+
+function getShotsInScene(sceneId) {
+  return state.shots.filter((shot) => shot.sceneId === sceneId);
+}
+
+function normalizeScene(input, order) {
+  const now = new Date().toISOString();
+  return {
+    id: String(input?.id || `scene-${crypto.randomUUID()}`),
+    name: String(input?.name || "").trim() || "新场次",
+    order: Number.isFinite(Number(input?.order)) ? Number(input.order) : Number(order) || 0,
+    createdAt: String(input?.createdAt || now),
+    updatedAt: String(input?.updatedAt || now),
+  };
+}
+
+async function addScene() {
+  const name = (prompt("新场次名称：", `场次 ${(state.scenes || []).length + 1}`) || "").trim();
+  if (!name) return;
+  const scene = createScene(name);
+  state.scenes.push(scene);
+  state.scenes.sort((a, b) => (a.order || 0) - (b.order || 0));
+  state.currentSceneId = scene.id;
+  await persistState(`已新建场次「${scene.name}」。`);
+  render();
+}
+
+async function renameScene(sceneId) {
+  const scene = getSceneById(sceneId);
+  if (!scene) return;
+  const next = (prompt("重命名场次：", scene.name) || "").trim();
+  if (!next || next === scene.name) return;
+  scene.name = next;
+  scene.updatedAt = new Date().toISOString();
+  await persistState("场次已重命名。");
+  render();
+}
+
+async function deleteScene(sceneId) {
+  const scene = getSceneById(sceneId);
+  if (!scene) return;
+  const remaining = state.scenes.filter((s) => s.id !== sceneId);
+  if (!remaining.length) {
+    setStatus("至少保留一个场次。");
+    return;
+  }
+  const shotsInScene = getShotsInScene(sceneId);
+  let fallbackId = remaining[0].id;
+  if (shotsInScene.length) {
+    let defaultScene = state.scenes.find((s) => s.id === DEFAULT_SCENE_ID);
+    if (!defaultScene) {
+      defaultScene = normalizeScene({ id: DEFAULT_SCENE_ID, name: DEFAULT_SCENE_NAME }, state.scenes.length);
+      state.scenes.push(defaultScene);
+    }
+    fallbackId = defaultScene.id;
+    const confirmText = `场次「${scene.name}」里还有 ${shotsInScene.length} 个镜头，删除后会全部移到「${defaultScene.name}」。确认删除？`;
+    if (!confirm(confirmText)) return;
+    shotsInScene.forEach((shot) => { shot.sceneId = fallbackId; });
+  } else {
+    if (!confirm(`删除场次「${scene.name}」？`)) return;
+  }
+  state.scenes = state.scenes.filter((s) => s.id !== sceneId);
+  state.scenes.sort((a, b) => (a.order || 0) - (b.order || 0));
+  state.scenes.forEach((s, i) => { s.order = i; });
+  if (state.currentSceneId === sceneId) {
+    state.currentSceneId = fallbackId;
+  }
+  await persistState(`已删除场次「${scene.name}」。`);
+  render();
+}
+
+async function setCurrentScene(sceneId) {
+  if (state.currentSceneId === sceneId) return;
+  state.currentSceneId = sceneId;
+  uiState.shotJumpQuery = "";
+  if (elements.shotJumpInput) elements.shotJumpInput.value = "";
+  await persistState(`已切换到场次「${getSceneById(sceneId)?.name || ""}」。`);
+  render();
+}
+
+async function moveShotToScene(shotId, sceneId) {
+  const shot = getShotById(shotId);
+  if (!shot) return;
+  if (!getSceneById(sceneId)) return;
+  if (shot.sceneId === sceneId) return;
+  shot.sceneId = sceneId;
+  shot.updatedAt = new Date().toISOString();
+  await persistState(`镜头已移到「${getSceneById(sceneId).name}」。`);
+  render();
+}
+
+function setShotCollapsed(shotId, collapsed) {
+  if (collapsed) {
+    uiState.collapsedShotIds.add(shotId);
+  } else {
+    uiState.collapsedShotIds.delete(shotId);
+  }
+  const card = document.querySelector(`.shot-card[data-shot-id="${shotId}"]`);
+  if (card) {
+    card.dataset.collapsed = collapsed ? "true" : "false";
+    const btn = card.querySelector(".shot-collapse-button");
+    if (btn) btn.textContent = collapsed ? "展开" : "折叠";
+  }
+}
+
+function setAllShotsCollapsed(collapsed) {
+  const sceneId = getActiveSceneId();
+  getShotsInScene(sceneId).forEach((shot) => setShotCollapsed(shot.id, collapsed));
+}
+
+function toggleSidebar() {
+  uiState.sidebarCollapsed = !uiState.sidebarCollapsed;
+  document.body.dataset.sidebarCollapsed = uiState.sidebarCollapsed ? "true" : "false";
+  elements.shotSidebar.classList.toggle("is-collapsed", uiState.sidebarCollapsed);
+  elements.shotSidebarToggleButton.textContent = uiState.sidebarCollapsed ? "显示目录" : "隐藏目录";
+}
+
+function matchesJumpQuery(shot, index, query) {
+  if (!query) return true;
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const asNumber = Number.parseInt(q, 10);
+  if (Number.isFinite(asNumber) && String(asNumber) === q) {
+    return index + 1 === asNumber;
+  }
+  const title = String(shot.title || "").toLowerCase();
+  const notes = String(shot.directorNotes || "").toLowerCase();
+  return title.includes(q) || notes.includes(q);
+}
+
+function jumpToShot(shotId) {
+  const card = document.querySelector(`.shot-card[data-shot-id="${shotId}"]`);
+  if (!card) return;
+  if (uiState.collapsedShotIds.has(shotId)) {
+    setShotCollapsed(shotId, false);
+  }
+  card.scrollIntoView({ behavior: "smooth", block: "start" });
+  card.classList.add("is-jump-highlight");
+  setTimeout(() => card.classList.remove("is-jump-highlight"), 1400);
 }
 
 function createReference(mediaType, url, role, title) {
@@ -3700,14 +4020,42 @@ async function loadState() {
 
 function normalizeState(input) {
   if (!input) {
-    return structuredClone(defaultState);
+    const fresh = structuredClone(defaultState);
+    fresh.scenes = [normalizeScene({ id: DEFAULT_SCENE_ID, name: DEFAULT_SCENE_NAME }, 0)];
+    fresh.currentSceneId = DEFAULT_SCENE_ID;
+    return fresh;
   }
 
-  const shots = Array.isArray(input.shots) ? input.shots : [];
+  const rawShots = Array.isArray(input.shots) ? input.shots : [];
+  const rawScenes = Array.isArray(input.scenes) ? input.scenes : [];
   const favorites = Array.isArray(input.favorites) ? input.favorites : [];
   const subjects = Array.isArray(input.subjects) ? input.subjects : [];
   const enhanceTasks = Array.isArray(input.enhanceTasks) ? input.enhanceTasks : [];
   const understandTasks = Array.isArray(input.understandTasks) ? input.understandTasks : [];
+
+  const normalizedShots = rawShots.map(normalizeShot);
+  const scenes = rawScenes.map((s, i) => normalizeScene(s, i));
+  if (!scenes.some((s) => s.id === DEFAULT_SCENE_ID)) {
+    const needsDefault = normalizedShots.some((shot) => !shot.sceneId)
+      || scenes.length === 0;
+    if (needsDefault) {
+      scenes.unshift(normalizeScene({ id: DEFAULT_SCENE_ID, name: DEFAULT_SCENE_NAME }, 0));
+    }
+  }
+  const sceneIds = new Set(scenes.map((s) => s.id));
+  normalizedShots.forEach((shot) => {
+    if (!shot.sceneId || !sceneIds.has(shot.sceneId)) {
+      shot.sceneId = DEFAULT_SCENE_ID;
+    }
+  });
+  scenes.sort((a, b) => (a.order || 0) - (b.order || 0));
+  scenes.forEach((s, i) => { s.order = i; });
+
+  let currentSceneId = String(input.currentSceneId || "");
+  if (!sceneIds.has(currentSceneId)) {
+    currentSceneId = scenes[0]?.id || "";
+  }
+
   return {
     settings: {
       ...defaultState.settings,
@@ -3722,11 +4070,34 @@ function normalizeState(input) {
       understandProvider: normalizeUnderstandProvider(input?.settings?.understandProvider),
       customProvider: normalizeCustomProvider(input?.settings?.customProvider, input?.settings?.model),
     },
-    shots: shots.length ? shots.map(normalizeShot) : [createShot()],
+    shots: normalizedShots.length ? normalizedShots : [seedInitialShot(scenes)],
+    scenes,
+    currentSceneId,
     favorites: favorites.map(normalizeFavorite),
     subjects: subjects.map(normalizeSubject),
     enhanceTasks: enhanceTasks.map(normalizeEnhanceTask),
     understandTasks: understandTasks.map(normalizeUnderstandTask),
+  };
+}
+
+function seedInitialShot(scenes) {
+  const now = new Date().toISOString();
+  const sceneId = scenes[0]?.id || DEFAULT_SCENE_ID;
+  return {
+    id: crypto.randomUUID(),
+    sceneId,
+    linkedFavoriteId: "",
+    title: "",
+    directorNotes: "",
+    references: [],
+    videoConfig: createDefaultVideoConfig(),
+    videoTask: createEmptyVideoTask(),
+    currentPrompt: "",
+    promptHistory: [],
+    chatHistory: [],
+    videoHistory: [],
+    createdAt: now,
+    updatedAt: now,
   };
 }
 
@@ -3802,6 +4173,7 @@ function normalizeShot(input) {
 
   return {
     id: input?.id || crypto.randomUUID(),
+    sceneId: String(input?.sceneId || ""),
     linkedFavoriteId: input?.linkedFavoriteId || "",
     title: input?.title || "",
     directorNotes: input?.directorNotes || "",

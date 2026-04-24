@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="./styles.css?v=20260417c">
+  <link rel="stylesheet" href="./styles.css?v=20260424a">
 </head>
 <body>
   <div class="shell">
@@ -92,7 +92,31 @@
           </div>
           <p id="statusText" class="status-text">本地自动存档已开启。</p>
         </section>
-        <section id="shotsContainer" class="shots-container"></section>
+        <section id="sceneTabsBar" class="scene-tabs-bar">
+          <div class="scene-tabs-row">
+            <div id="sceneTabs" class="scene-tabs" role="tablist"></div>
+            <button id="sceneAddButton" class="ghost-button scene-add-button" type="button">+ 新建场次</button>
+          </div>
+          <div class="scene-tools-row">
+            <label class="field compact scene-jump-field">
+              <span>跳转到镜头</span>
+              <input id="shotJumpInput" type="text" placeholder="输入序号（如 12）或标题关键字">
+            </label>
+            <button id="shotCollapseAllButton" class="ghost-button" type="button">全部折叠</button>
+            <button id="shotExpandAllButton" class="ghost-button" type="button">全部展开</button>
+            <button id="shotSidebarToggleButton" class="ghost-button" type="button">隐藏目录</button>
+          </div>
+        </section>
+        <div class="workspace-split">
+          <aside id="shotSidebar" class="shot-sidebar" aria-label="镜头目录">
+            <div class="shot-sidebar-header">
+              <h3>镜头目录</h3>
+              <span id="shotSidebarCount" class="meta"></span>
+            </div>
+            <div id="shotSidebarList" class="shot-sidebar-list"></div>
+          </aside>
+          <section id="shotsContainer" class="shots-container"></section>
+        </div>
       </section>
 
       <section id="subjectsView" hidden>
@@ -316,7 +340,14 @@
 
       <template id="shotTemplate">
         <article class="shot-card">
-          <div class="shot-order"></div>
+          <header class="shot-card-head">
+            <div class="shot-order"></div>
+            <div class="shot-head-title"></div>
+            <div class="shot-head-actions">
+              <select class="shot-scene-select" aria-label="移到场次"></select>
+              <button class="ghost-button shot-collapse-button" type="button">折叠</button>
+            </div>
+          </header>
           <div class="shot-status-bar" hidden></div>
           <div class="shot-main">
             <section class="image-panel">
@@ -524,6 +555,6 @@
     </div>
   </div>
 
-  <script src="./app.js?v=20260417c"></script>
+  <script src="./app.js?v=20260424a"></script>
 </body>
 </html>
