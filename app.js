@@ -524,6 +524,19 @@ function render() {
     videoRatioInput.value = shot.videoConfig.ratio;
     videoDurationInput.value = String(shot.videoConfig.duration);
     videoResolutionInput.value = shot.videoConfig.resolution;
+    {
+      const videoModel = normalizeVideoProvider(state.settings.videoProvider).model;
+      const supports1080p = videoModelSupports1080p(videoModel);
+      const option1080p = videoResolutionInput.querySelector('option[value="1080p"]');
+      if (option1080p) {
+        option1080p.disabled = !supports1080p;
+        option1080p.textContent = supports1080p ? "1080p" : "1080p（当前模型不支持）";
+      }
+      if (!supports1080p && shot.videoConfig.resolution === "1080p") {
+        shot.videoConfig.resolution = "720p";
+        videoResolutionInput.value = "720p";
+      }
+    }
     videoSeedInput.value = shot.videoConfig.seed ?? "";
     videoGenerateAudioInput.checked = shot.videoConfig.generateAudio !== false;
     videoCameraFixedInput.checked = Boolean(shot.videoConfig.cameraFixed);
@@ -3007,6 +3020,34 @@ function normalizeVideoProvider(input) {
   return provider;
 }
 
+function videoModelSupports1080p(model) {
+  const normalized = String(model || "").toLowerCase();
+  if (!normalized) return true;
+  return !normalized.includes("fast");
+}
+
+function syncVideoResolutionOptions() {
+  const model = normalizeVideoProvider(state.settings.videoProvider).model;
+  const supports = videoModelSupports1080p(model);
+  const selects = document.querySelectorAll(".shot-card .video-resolution");
+  selects.forEach((select) => {
+    const option = select.querySelector('option[value="1080p"]');
+    if (!option) return;
+    option.disabled = !supports;
+    option.textContent = supports ? "1080p" : "1080p（当前模型不支持）";
+    if (!supports && select.value === "1080p") {
+      select.value = "720p";
+      const card = select.closest(".shot-card");
+      const shotId = card?.dataset.shotId;
+      const shot = shotId ? getShotById(shotId) : null;
+      if (shot) {
+        shot.videoConfig.resolution = "720p";
+        shot.updatedAt = new Date().toISOString();
+      }
+    }
+  });
+}
+
 function createDefaultMediaKitProvider() {
   return {
     baseUrl: DEFAULT_ENHANCE_BASE_URL,
@@ -4100,6 +4141,7 @@ function renderSettingsModal() {
       ...normalizeVideoProvider(state.settings.videoProvider),
       model: event.target.value,
     };
+    syncVideoResolutionOptions();
     queuePersistState("视频模型设置已更新。");
   });
 
