@@ -16,6 +16,8 @@ const DEFAULT_ENHANCE_BASE_URL = "https://amk.cn-beijing.volces.com/api/v1";
 const UNDERSTAND_BASE_URL = "/api/understand-video";
 const DEFAULT_UNDERSTAND_BASE_URL = "https://amk-ark.cn-beijing.volces.com/api/v1";
 const DEFAULT_UNDERSTAND_MODEL = "doubao-seed-1-6-vision-250615";
+const PROXY_VIDEO_URL = "/api/proxy-video";
+const LOCAL_VIDEO_DIR_RECORD_KEY = "local-video-dir-handle";
 const SYSTEM_PROMPT = "你是专业的视频生成提示词导演，只输出最终可直接使用的中文视频生成 Prompt，不要解释。";
 const PROVIDER_CONFIGS = {
   gemini: {
@@ -185,6 +187,10 @@ let dbPromise;
 let persistTimer = null;
 const videoPollTimers = new Map();
 const enhancePollTimers = new Map();
+let localVideoDirHandle = null;
+let localVideoDirPermission = "unsupported";
+const localVideoObjectUrlCache = new Map();
+const pendingLocalVideoSaves = new Set();
 const mentionDropdown = document.createElement("div");
 mentionDropdown.className = "mention-dropdown";
 mentionDropdown.hidden = true;
@@ -233,6 +239,7 @@ async function bootstrap() {
     await persistState("已创建初始镜头。");
   }
 
+  await initLocalVideoDir();
   render();
   resumePendingVideoTasks();
   resumePendingEnhanceTasks();
@@ -706,6 +713,7 @@ function render() {
     elements.shotsContainer.append(fragment);
   });
 
+  hydrateLocalVideoElements(elements.shotsContainer);
   renderFavorites();
   updateSummary();
 }
@@ -1001,8 +1009,8 @@ function renderFavoriteVideoHistory(container, favorite) {
     item.innerHTML = `
       ${entry.requestSummary ? `<p class="video-history-meta">${escapeHtml(entry.requestSummary)}</p>` : ""}
       ${entry.prompt ? `<p class="truncatable video-history-prompt">${escapeHtml(entry.prompt)}</p>` : ""}
-      ${hasVideo ? `<video src="${escapeHtml(entry.videoUrl)}" controls playsinline></video>` : ""}
-      ${hasVideo ? `<p class="video-history-meta"><a href="${escapeHtml(entry.videoUrl)}" target="_blank" rel="noopener noreferrer">打开视频链接</a></p>` : ""}
+      ${hasVideo ? `<video src="${escapeHtml(entry.videoUrl)}" ${entry.localFileName ? `data-local-filename="${escapeHtml(entry.localFileName)}"` : ""} controls playsinline></video>` : ""}
+      ${hasVideo ? `<p class="video-history-meta"><a href="${escapeHtml(entry.videoUrl)}" target="_blank" rel="noopener noreferrer">打开视频链接</a>${entry.localFileName ? ` · 本地：${escapeHtml(entry.localFileName)}` : ""}</p>` : ""}
     `;
     const promptEl = item.querySelector("p.truncatable");
     if (promptEl) {
@@ -1010,6 +1018,7 @@ function renderFavoriteVideoHistory(container, favorite) {
     }
     container.append(item);
   });
+  hydrateLocalVideoElements(container);
 }
 
 function renderFavoriteModal(favorite) {
@@ -2417,6 +2426,10 @@ async function refreshVideoTaskStatus(shotId, options = {}) {
 
     await persistState(result.message || getVideoStatusMessage(nextStatus));
     updateShotVideoUI(shotId);
+
+    if (nextStatus === "succeeded") {
+      autoSaveShotVideoToLocal(shot);
+    }
   } catch (error) {
     stopVideoPolling(shotId);
     shot.videoTask = {
@@ -2974,6 +2987,7 @@ function createEmptyVideoTask() {
     requestSummary: "",
     createdAt: "",
     updatedAt: "",
+    localFileName: "",
   };
 }
 
@@ -3006,6 +3020,7 @@ function normalizeVideoTask(input) {
     requestSummary: String(input?.requestSummary || ""),
     createdAt: String(input?.createdAt || ""),
     updatedAt: String(input?.updatedAt || ""),
+    localFileName: String(input?.localFileName || ""),
   };
 }
 
@@ -3046,6 +3061,225 @@ function syncVideoResolutionOptions() {
       }
     }
   });
+}
+
+function isFileSystemAccessSupported() {
+  return typeof window !== "undefined" && typeof window.showDirectoryPicker === "function";
+}
+
+async function loadLocalVideoDirHandleFromIdb() {
+  try {
+    const db = await getDb();
+    const tx = db.transaction(STORE_NAME, "readonly");
+    const record = await requestResult(tx.objectStore(STORE_NAME).get(LOCAL_VIDEO_DIR_RECORD_KEY));
+    return record?.handle || null;
+  } catch (error) {
+    console.error("读取本地视频目录句柄失败：", error);
+    return null;
+  }
+}
+
+async function persistLocalVideoDirHandleToIdb(handle) {
+  const db = await getDb();
+  const tx = db.transaction(STORE_NAME, "readwrite");
+  tx.objectStore(STORE_NAME).put({ id: LOCAL_VIDEO_DIR_RECORD_KEY, handle });
+  await transactionDone(tx);
+}
+
+async function clearLocalVideoDirHandleFromIdb() {
+  const db = await getDb();
+  const tx = db.transaction(STORE_NAME, "readwrite");
+  tx.objectStore(STORE_NAME).delete(LOCAL_VIDEO_DIR_RECORD_KEY);
+  await transactionDone(tx);
+}
+
+async function initLocalVideoDir() {
+  if (!isFileSystemAccessSupported()) {
+    localVideoDirPermission = "unsupported";
+    return;
+  }
+  localVideoDirHandle = await loadLocalVideoDirHandleFromIdb();
+  if (!localVideoDirHandle) {
+    localVideoDirPermission = "none";
+    return;
+  }
+  try {
+    const perm = await localVideoDirHandle.queryPermission({ mode: "readwrite" });
+    localVideoDirPermission = perm; // "granted" | "prompt" | "denied"
+  } catch (error) {
+    console.error(error);
+    localVideoDirPermission = "prompt";
+  }
+}
+
+async function ensureLocalVideoDirPermission({ request = false } = {}) {
+  if (!isFileSystemAccessSupported() || !localVideoDirHandle) {
+    return false;
+  }
+  try {
+    let perm = await localVideoDirHandle.queryPermission({ mode: "readwrite" });
+    if (perm !== "granted" && request) {
+      perm = await localVideoDirHandle.requestPermission({ mode: "readwrite" });
+    }
+    localVideoDirPermission = perm;
+    return perm === "granted";
+  } catch (error) {
+    console.error(error);
+    localVideoDirPermission = "prompt";
+    return false;
+  }
+}
+
+async function pickLocalVideoDirectory() {
+  if (!isFileSystemAccessSupported()) {
+    throw new Error("当前浏览器不支持 File System Access API，请改用 Chrome / Edge。");
+  }
+  const handle = await window.showDirectoryPicker({ id: "shot-prompt-local-videos", mode: "readwrite" });
+  const perm = await handle.requestPermission({ mode: "readwrite" });
+  if (perm !== "granted") {
+    throw new Error("未获得目录的读写权限。");
+  }
+  localVideoDirHandle = handle;
+  localVideoDirPermission = "granted";
+  revokeAllLocalVideoObjectUrls();
+  await persistLocalVideoDirHandleToIdb(handle);
+}
+
+async function clearLocalVideoDirectory() {
+  localVideoDirHandle = null;
+  localVideoDirPermission = isFileSystemAccessSupported() ? "none" : "unsupported";
+  revokeAllLocalVideoObjectUrls();
+  await clearLocalVideoDirHandleFromIdb();
+}
+
+function revokeAllLocalVideoObjectUrls() {
+  localVideoObjectUrlCache.forEach((url) => {
+    try { URL.revokeObjectURL(url); } catch {}
+  });
+  localVideoObjectUrlCache.clear();
+}
+
+function buildLocalVideoFilename(prefix, taskId, ext = "mp4") {
+  const safePrefix = String(prefix || "video").replace(/[^a-zA-Z0-9_-]/g, "");
+  const safeTaskId = String(taskId || "").replace(/[^a-zA-Z0-9_-]/g, "");
+  const stamp = safeTaskId || Date.now().toString(36);
+  return `${safePrefix}_${stamp}.${ext}`;
+}
+
+async function downloadVideoToLocalDir(remoteUrl, filename) {
+  if (!localVideoDirHandle) {
+    throw new Error("未设置本地视频目录。");
+  }
+  if (!remoteUrl) {
+    throw new Error("缺少视频 URL。");
+  }
+  const proxied = `${PROXY_VIDEO_URL}?url=${encodeURIComponent(remoteUrl)}`;
+  const response = await fetch(proxied);
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.error || `下载视频失败（${response.status}）`);
+  }
+  const blob = await response.blob();
+  const fileHandle = await localVideoDirHandle.getFileHandle(filename, { create: true });
+  const writable = await fileHandle.createWritable();
+  await writable.write(blob);
+  await writable.close();
+  return filename;
+}
+
+async function readLocalVideoObjectUrl(filename) {
+  if (!filename) return "";
+  if (localVideoObjectUrlCache.has(filename)) {
+    return localVideoObjectUrlCache.get(filename);
+  }
+  if (!localVideoDirHandle) return "";
+  try {
+    const fileHandle = await localVideoDirHandle.getFileHandle(filename, { create: false });
+    const file = await fileHandle.getFile();
+    const url = URL.createObjectURL(file);
+    localVideoObjectUrlCache.set(filename, url);
+    return url;
+  } catch {
+    return "";
+  }
+}
+
+function hydrateLocalVideoElements(root) {
+  if (!root) return;
+  if (!localVideoDirHandle || localVideoDirPermission !== "granted") return;
+  const targets = root.querySelectorAll("video[data-local-filename]");
+  targets.forEach(async (video) => {
+    const filename = video.dataset.localFilename;
+    if (!filename) return;
+    const url = await readLocalVideoObjectUrl(filename);
+    if (url && video.isConnected) {
+      video.src = url;
+    }
+  });
+}
+
+async function autoSaveShotVideoToLocal(shot) {
+  if (!shot?.videoTask?.videoUrl) return;
+  if (!localVideoDirHandle) return;
+  if (localVideoDirPermission !== "granted") return;
+  if (shot.videoTask.localFileName) return;
+  const key = `shot:${shot.id}:${shot.videoTask.id || shot.videoTask.videoUrl}`;
+  if (pendingLocalVideoSaves.has(key)) return;
+  pendingLocalVideoSaves.add(key);
+  try {
+    const filename = buildLocalVideoFilename("seedance", shot.videoTask.id);
+    await downloadVideoToLocalDir(shot.videoTask.videoUrl, filename);
+    shot.videoTask.localFileName = filename;
+    const historyEntry = (shot.videoHistory || []).find((e) => e.taskId === shot.videoTask.id);
+    if (historyEntry && !historyEntry.localFileName) {
+      historyEntry.localFileName = filename;
+    }
+    shot.updatedAt = new Date().toISOString();
+    await persistState("视频已保存到本地目录。");
+    updateShotVideoUI(shot.id);
+  } catch (error) {
+    console.error(error);
+    setStatus(`本地保存失败：${error.message || error}`);
+  } finally {
+    pendingLocalVideoSaves.delete(key);
+  }
+}
+
+async function autoSaveEnhanceVideoToLocal(task) {
+  if (!task?.videoUrl) return;
+  if (!localVideoDirHandle) return;
+  if (localVideoDirPermission !== "granted") return;
+  if (task.localFileName) return;
+  const key = `enhance:${task.id}:${task.taskId || task.videoUrl}`;
+  if (pendingLocalVideoSaves.has(key)) return;
+  pendingLocalVideoSaves.add(key);
+  try {
+    const filename = buildLocalVideoFilename("enhance", task.taskId);
+    await downloadVideoToLocalDir(task.videoUrl, filename);
+    task.localFileName = filename;
+    task.updatedAt = new Date().toISOString();
+    await persistState("增强视频已保存到本地目录。");
+    renderEnhanceView();
+  } catch (error) {
+    console.error(error);
+    setEnhanceStatus(`本地保存失败：${error.message || error}`);
+  } finally {
+    pendingLocalVideoSaves.delete(key);
+  }
+}
+
+function describeLocalVideoDirStatus() {
+  if (!isFileSystemAccessSupported()) {
+    return { label: "当前浏览器不支持", hint: "请使用 Chrome / Edge 等基于 Chromium 的浏览器。", canPick: false };
+  }
+  if (!localVideoDirHandle) {
+    return { label: "未设置", hint: "点击下方按钮选择一个用来保存生成视频的本地目录。", canPick: true };
+  }
+  const name = localVideoDirHandle.name || "已选择目录";
+  if (localVideoDirPermission === "granted") {
+    return { label: `已绑定：${name}`, hint: "视频生成成功后会自动保存到该目录。", canPick: true, canClear: true, canReauth: false };
+  }
+  return { label: `需要重新授权：${name}`, hint: "浏览器已记住目录，但当前会话需要你重新授权才能写入。", canPick: true, canClear: true, canReauth: true };
 }
 
 function createDefaultMediaKitProvider() {
@@ -3112,6 +3346,7 @@ function normalizeEnhanceTask(input) {
     taskId: String(input?.taskId || "").trim(),
     status: normalizeVideoStatus(input?.status || "queued"),
     videoUrl: String(input?.videoUrl || ""),
+    localFileName: String(input?.localFileName || ""),
     error: String(input?.error || ""),
     origin: String(input?.origin || ""),
     requestSummary: String(input?.requestSummary || ""),
@@ -3246,8 +3481,14 @@ function renderVideoResult({ shot, videoTaskLabel, generatedVideo, videoLastFram
 
   if (hasVideo) {
     generatedVideo.src = task.videoUrl;
+    if (task.localFileName) {
+      generatedVideo.dataset.localFilename = task.localFileName;
+    } else {
+      delete generatedVideo.dataset.localFilename;
+    }
   } else {
     generatedVideo.removeAttribute("src");
+    delete generatedVideo.dataset.localFilename;
   }
 
   if (hasLastFrame) {
@@ -3268,6 +3509,9 @@ function renderVideoResult({ shot, videoTaskLabel, generatedVideo, videoLastFram
   }
   if (hasVideo) {
     metaLines.push(`<a href="${escapeHtml(task.videoUrl)}" target="_blank" rel="noopener noreferrer">打开视频链接</a>`);
+  }
+  if (task.localFileName) {
+    metaLines.push(`已保存到本地：${escapeHtml(task.localFileName)}`);
   }
 
   videoResultMeta.innerHTML = metaLines.join("<br>");
@@ -3295,6 +3539,7 @@ function updateShotVideoUI(shotId) {
   renderVideoResult({ shot, videoTaskLabel, generatedVideo, videoLastFrame, videoResultEmpty, videoResultMeta });
   renderVideoHistory(videoHistoryList, shot);
   videoHistoryCount.textContent = `${(shot.videoHistory || []).length} 条归档`;
+  hydrateLocalVideoElements(card);
 }
 
 function renderVideoHistory(container, shot) {
@@ -3323,8 +3568,8 @@ function renderVideoHistory(container, shot) {
       </header>
       ${entry.requestSummary ? `<p class="video-history-meta">${escapeHtml(entry.requestSummary)}</p>` : ""}
       ${entry.prompt ? `<p class="truncatable video-history-prompt">${escapeHtml(entry.prompt)}</p>` : ""}
-      ${hasVideo ? `<video src="${escapeHtml(entry.videoUrl)}" controls playsinline></video>` : ""}
-      ${hasVideo ? `<p class="video-history-meta"><a href="${escapeHtml(entry.videoUrl)}" target="_blank" rel="noopener noreferrer">打开视频链接</a></p>` : ""}
+      ${hasVideo ? `<video src="${escapeHtml(entry.videoUrl)}" ${entry.localFileName ? `data-local-filename="${escapeHtml(entry.localFileName)}"` : ""} controls playsinline></video>` : ""}
+      ${hasVideo ? `<p class="video-history-meta"><a href="${escapeHtml(entry.videoUrl)}" target="_blank" rel="noopener noreferrer">打开视频链接</a>${entry.localFileName ? ` · 本地：${escapeHtml(entry.localFileName)}` : ""}</p>` : ""}
     `;
 
     const promptEl = item.querySelector("p.truncatable");
@@ -3363,6 +3608,7 @@ function createVideoHistoryEntry(videoTask, prompt) {
     prompt: prompt || "",
     rating: 0,
     createdAt: new Date().toISOString(),
+    localFileName: videoTask.localFileName || "",
   };
 }
 
@@ -3915,6 +4161,7 @@ function renderSettingsModal() {
     .join("");
   const customProvider = normalizeCustomProvider(state.settings.customProvider, state.settings.model);
   const customRequestMode = customProvider.requestMode === "chat_completions" ? "chat_completions" : "responses";
+  const localVideoDirStatus = describeLocalVideoDirStatus();
   const customFieldsMarkup = provider.id === "custom" ? `
     <label class="field compact">
       <span>API 名称</span>
@@ -4062,6 +4309,22 @@ function renderSettingsModal() {
             <p class="meta">视频理解复用 Seedance / ARK API Key 与 MediaKit API Key，按 <code>Bearer 方舟Key/MediaKitKey</code> 拼接，通过服务端 /api/understand-video 代理。</p>
           </div>
         </section>
+        <section class="prompt-panel settings-panel">
+          <div class="favorite-block">
+            <h3>本地视频保存目录</h3>
+            <div class="secure-field">
+              <span class="secure-label">当前状态</span>
+              <div class="secure-value">${escapeHtml(localVideoDirStatus.label)}</div>
+            </div>
+            <p class="meta">${escapeHtml(localVideoDirStatus.hint)}</p>
+            <div class="card-actions">
+              ${localVideoDirStatus.canPick ? `<button class="secondary-button settings-pick-local-video-dir-button" type="button">${localVideoDirHandle ? "更换目录" : "选择目录"}</button>` : ""}
+              ${localVideoDirStatus.canReauth ? '<button class="ghost-button settings-reauth-local-video-dir-button" type="button">重新授权</button>' : ""}
+              ${localVideoDirStatus.canClear ? '<button class="ghost-button settings-clear-local-video-dir-button danger" type="button">取消绑定</button>' : ""}
+            </div>
+            <p class="meta">视频生成或画质增强成功后，会通过服务端 /api/proxy-video 下载源流并以 <code>seedance_&lt;taskId&gt;.mp4</code> / <code>enhance_&lt;taskId&gt;.mp4</code> 写入该目录。仅写入新生成视频，不会回溯已有链接。</p>
+          </div>
+        </section>
       </div>
     </article>
   `;
@@ -4169,6 +4432,36 @@ function renderSettingsModal() {
       model: event.target.value,
     };
     queuePersistState("视频理解默认模型已更新。");
+  });
+
+  const rerenderAllVideoViews = () => {
+    render();
+    renderEnhanceView();
+  };
+
+  const pickLocalDirButton = elements.settingsModalContent.querySelector(".settings-pick-local-video-dir-button");
+  pickLocalDirButton?.addEventListener("click", async () => {
+    try {
+      await pickLocalVideoDirectory();
+      setStatus("已绑定本地视频保存目录。");
+      rerenderAllVideoViews();
+    } catch (error) {
+      setStatus(error.message || "绑定目录失败。");
+    }
+  });
+
+  const reauthLocalDirButton = elements.settingsModalContent.querySelector(".settings-reauth-local-video-dir-button");
+  reauthLocalDirButton?.addEventListener("click", async () => {
+    const ok = await ensureLocalVideoDirPermission({ request: true });
+    setStatus(ok ? "目录权限已恢复。" : "未获得目录权限。");
+    rerenderAllVideoViews();
+  });
+
+  const clearLocalDirButton = elements.settingsModalContent.querySelector(".settings-clear-local-video-dir-button");
+  clearLocalDirButton?.addEventListener("click", async () => {
+    await clearLocalVideoDirectory();
+    setStatus("已取消本地视频目录绑定。");
+    rerenderAllVideoViews();
   });
 
   if (shouldEditApiKey) {
@@ -4615,13 +4908,14 @@ function renderEnhanceView() {
         ${task.error ? `<p class="enhance-task-error">${escapeHtml(task.error)}</p>` : ""}
         ${task.videoUrl ? `
           <div class="enhance-task-result">
-            <video class="enhance-task-video" src="${escapeHtml(task.videoUrl)}" controls playsinline></video>
+            <video class="enhance-task-video" src="${escapeHtml(task.videoUrl)}" ${task.localFileName ? `data-local-filename="${escapeHtml(task.localFileName)}"` : ""} controls playsinline></video>
             <div class="enhance-task-result-meta">
               ${result.resolution ? `<span class="meta">输出 ${escapeHtml(result.resolution)}</span>` : ""}
               ${result.toolVersion ? `<span class="meta">${escapeHtml(result.toolVersion)}</span>` : ""}
               ${Number.isFinite(Number(result.duration)) ? `<span class="meta">时长 ${Number(result.duration).toFixed(2)}s</span>` : ""}
               ${Number.isFinite(Number(result.fps)) ? `<span class="meta">${Number(result.fps).toFixed(2)} fps</span>` : ""}
               ${result.expiresAt ? `<span class="meta">链接有效期至 ${escapeHtml(formatUnixTime(result.expiresAt))}</span>` : ""}
+              ${task.localFileName ? `<span class="meta">已保存本地：${escapeHtml(task.localFileName)}</span>` : ""}
             </div>
           </div>
         ` : ""}
@@ -4673,6 +4967,7 @@ function renderEnhanceView() {
 
     container.append(card);
   });
+  hydrateLocalVideoElements(container);
 }
 
 function formatUnixTime(seconds) {
@@ -4805,6 +5100,10 @@ async function refreshEnhanceTaskStatus(taskLocalId, options = {}) {
 
     await persistState(result.message || getVideoStatusMessage(nextStatus));
     renderEnhanceView();
+
+    if (nextStatus === "succeeded") {
+      autoSaveEnhanceVideoToLocal(task);
+    }
   } catch (error) {
     stopEnhancePolling(task.id);
     task.status = "failed";
