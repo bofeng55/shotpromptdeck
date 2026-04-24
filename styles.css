@@ -646,9 +646,10 @@ button:disabled {
   gap: 12px;
   margin: 0 0 18px;
   padding: 14px 16px;
-  background: rgba(16, 16, 24, 0.4);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
 }
 
 .scene-tabs-row {
@@ -671,15 +672,15 @@ button:disabled {
   align-items: center;
   gap: 2px;
   padding: 2px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
   transition: background 0.15s, border-color 0.15s;
 }
 
 .scene-tab.is-active {
-  background: rgba(120, 160, 255, 0.18);
-  border-color: rgba(120, 160, 255, 0.5);
+  background: var(--accent-soft);
+  border-color: var(--accent);
 }
 
 .scene-tab-select {
@@ -689,44 +690,53 @@ button:disabled {
   padding: 6px 10px;
   background: transparent;
   border: none;
-  color: inherit;
+  color: var(--text);
   cursor: pointer;
-  border-radius: 6px;
+  border-radius: 8px;
   font-size: 13px;
+  font-weight: 500;
+}
+
+.scene-tab.is-active .scene-tab-select {
+  color: var(--accent-strong);
 }
 
 .scene-tab-select:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--surface-3);
 }
 
 .scene-tab-count {
   font-size: 11px;
-  opacity: 0.7;
+  color: var(--muted);
   padding: 1px 6px;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--surface-3);
   border-radius: 10px;
+}
+
+.scene-tab.is-active .scene-tab-count {
+  background: rgba(184, 90, 49, 0.2);
+  color: var(--accent-strong);
 }
 
 .scene-tab-rename,
 .scene-tab-delete {
   background: transparent;
   border: none;
-  color: inherit;
+  color: var(--muted);
   cursor: pointer;
   padding: 4px 6px;
-  border-radius: 4px;
+  border-radius: 6px;
   font-size: 13px;
-  opacity: 0.5;
 }
 
 .scene-tab-rename:hover,
 .scene-tab-delete:hover {
-  opacity: 1;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--surface-3);
+  color: var(--text);
 }
 
 .scene-tab-delete:hover {
-  color: #ff7b7b;
+  color: var(--danger);
 }
 
 .scene-add-button {
@@ -757,11 +767,12 @@ button:disabled {
   width: 240px;
   max-height: calc(100vh - 40px);
   overflow-y: auto;
-  background: rgba(16, 16, 24, 0.4);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
-  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 14px;
   flex-shrink: 0;
+  box-shadow: var(--shadow);
 }
 
 body[data-sidebar-collapsed="true"] .shot-sidebar,
@@ -775,13 +786,14 @@ body[data-sidebar-collapsed="true"] .shot-sidebar,
   justify-content: space-between;
   margin-bottom: 10px;
   padding-bottom: 8px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid var(--line);
 }
 
 .shot-sidebar-header h3 {
   font-size: 13px;
   margin: 0;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.04em;
+  color: var(--text);
 }
 
 .shot-sidebar-list {
@@ -797,16 +809,17 @@ body[data-sidebar-collapsed="true"] .shot-sidebar,
   padding: 6px 8px;
   background: transparent;
   border: none;
-  color: inherit;
+  color: var(--text);
   cursor: pointer;
-  border-radius: 6px;
+  border-radius: 8px;
   text-align: left;
   font-size: 12px;
   transition: background 0.12s;
+  width: 100%;
 }
 
 .shot-sidebar-item:hover {
-  background: rgba(120, 160, 255, 0.12);
+  background: var(--accent-soft);
 }
 
 .shot-sidebar-item.is-dimmed {
@@ -816,8 +829,9 @@ body[data-sidebar-collapsed="true"] .shot-sidebar,
 .sidebar-order {
   font-family: "Space Grotesk", monospace;
   font-size: 11px;
-  opacity: 0.65;
+  color: var(--muted);
   min-width: 36px;
+  letter-spacing: 0.08em;
 }
 
 .sidebar-title {
@@ -831,21 +845,22 @@ body[data-sidebar-collapsed="true"] .shot-sidebar,
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #7be391;
+  background: var(--accent);
+  flex-shrink: 0;
 }
 
 .shot-card-head {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 18px 8px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  padding: 12px 0;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--line);
   flex-wrap: wrap;
 }
 
 .shot-card-head .shot-order {
   margin: 0;
-  padding: 0;
 }
 
 .shot-head-title {
@@ -855,7 +870,7 @@ body[data-sidebar-collapsed="true"] .shot-sidebar,
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 13px;
-  opacity: 0.8;
+  color: var(--muted);
 }
 
 .shot-head-actions {
@@ -865,27 +880,28 @@ body[data-sidebar-collapsed="true"] .shot-sidebar,
 }
 
 .shot-scene-select {
-  padding: 4px 8px;
+  padding: 6px 10px;
   font-size: 12px;
-  background: rgba(255, 255, 255, 0.06);
-  color: inherit;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
 }
 
 .shot-collapse-button {
-  padding: 4px 10px;
-  font-size: 12px;
+  padding: 5px 12px !important;
+  font-size: 12px !important;
 }
 
-.shot-card[data-collapsed="true"] .shot-main,
-.shot-card[data-collapsed="true"] .shot-footer {
-  display: none;
+.shot-card[data-collapsed="true"] > .shot-main,
+.shot-card[data-collapsed="true"] > .shot-footer,
+.shot-card[data-collapsed="true"] > .shot-status-bar {
+  display: none !important;
 }
 
-.shot-card[data-collapsed="true"] .shot-card-head {
+.shot-card[data-collapsed="true"] > .shot-card-head {
   border-bottom: none;
-  padding-bottom: 10px;
+  margin-bottom: 0;
 }
 
 .shot-card.is-jump-highlight {
@@ -897,9 +913,40 @@ body[data-sidebar-collapsed="true"] .shot-sidebar,
 }
 
 @keyframes shotCardPulse {
-  0% { box-shadow: 0 0 0 0 rgba(120, 160, 255, 0.6); }
-  40% { box-shadow: 0 0 0 8px rgba(120, 160, 255, 0.35); }
-  100% { box-shadow: 0 0 0 0 rgba(120, 160, 255, 0); }
+  0% { box-shadow: 0 0 0 0 rgba(184, 90, 49, 0.5); }
+  40% { box-shadow: 0 0 0 8px rgba(184, 90, 49, 0.22); }
+  100% { box-shadow: 0 0 0 0 rgba(184, 90, 49, 0); }
+}
+
+.back-to-top-button {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+  box-shadow: 0 12px 28px rgba(184, 90, 49, 0.35);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(12px);
+  transition: opacity 0.2s, transform 0.2s;
+  z-index: 40;
+}
+
+.back-to-top-button.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.back-to-top-button:hover {
+  background: var(--accent-strong);
 }
 
 .favorites-grid {

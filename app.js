@@ -124,6 +124,7 @@ const elements = {
   shotSidebar: document.querySelector("#shotSidebar"),
   shotSidebarList: document.querySelector("#shotSidebarList"),
   shotSidebarCount: document.querySelector("#shotSidebarCount"),
+  backToTopButton: document.querySelector("#backToTopButton"),
   subjectsView: document.querySelector("#subjectsView"),
   subjectsContainer: document.querySelector("#subjectsContainer"),
   subjectsUploadInput: document.querySelector("#subjectsUploadInput"),
@@ -478,6 +479,15 @@ function bindGlobalEvents() {
   elements.shotCollapseAllButton?.addEventListener("click", () => setAllShotsCollapsed(true));
   elements.shotExpandAllButton?.addEventListener("click", () => setAllShotsCollapsed(false));
   elements.shotSidebarToggleButton?.addEventListener("click", () => toggleSidebar());
+
+  elements.backToTopButton?.addEventListener("click", () => {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  });
+  window.addEventListener("scroll", () => {
+    if (!elements.backToTopButton) return;
+    const scrolled = window.scrollY || document.documentElement.scrollTop;
+    elements.backToTopButton.classList.toggle("is-visible", scrolled > 400);
+  }, { passive: true });
 
   elements.lightboxClose.addEventListener("click", closeLightbox);
   elements.lightboxBackdrop.addEventListener("click", closeLightbox);
